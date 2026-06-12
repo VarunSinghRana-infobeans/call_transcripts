@@ -30,6 +30,18 @@ def fmt_pct(value, decimals=1, fallback="N/A"):
     return fmt_num(value, decimals, fallback)
 
 
+def _fmt_date_range(date_min: str, date_max: str) -> str:
+    """Return a compact, readable date range like 'Feb 03 – Apr 28'."""
+    try:
+        from datetime import datetime
+        dmin = datetime.strptime(date_min, "%Y-%m-%d")
+        dmax = datetime.strptime(date_max, "%Y-%m-%d")
+        return f"{dmin.strftime('%b %d')} – {dmax.strftime('%b %d')}"
+    except Exception:
+        return f"{date_min[-5:]} – {date_max[-5:]}"
+
+
+
 # ---------------------------------------------------------------------------
 # Slide dimensions — 16:9 executive format (matches reference deck)
 # ---------------------------------------------------------------------------
@@ -507,7 +519,7 @@ def add_dataset_slide(prs, data: PresentationData):
         (data.total_calls, "Total Calls", C_PRIMARY),
         (fmt_num(data.duration_mean), "Avg Duration (min)", C_SECONDARY),
         (fmt_num(data.avg_sentiment), "Avg Sentiment", C_GREEN),
-        (f"{data.date_min[-5:]} → {data.date_max[-5:]}", "Date Range", C_ACCENT),
+        (_fmt_date_range(data.date_min, data.date_max), "Date Range", C_ACCENT),
     ]
     box_w = Inches(2.35)
     box_h = Inches(1.0)
@@ -516,7 +528,7 @@ def add_dataset_slide(prs, data: PresentationData):
     for i, (val, label, color) in enumerate(kpis):
         left = start_x + i * (box_w + gap)
         add_card(slide, left, CONTENT_Y, box_w, box_h)
-        val_font = Pt(24) if label == "Date Range" else FONT_KPI
+        val_font = Pt(20) if label == "Date Range" else FONT_KPI
         add_text(slide, left, CONTENT_Y + Inches(0.08), box_w, Inches(0.55),
                  str(val), val_font, bold=True, color=color, align=PP_ALIGN.CENTER)
         add_text(slide, left, CONTENT_Y + Inches(0.63), box_w, Inches(0.28),
