@@ -1,0 +1,13 @@
+pandas
+numpy
+matplotlib
+seaborn
+scikit-learn
+hdbscan
+sentence-transformers
+tfidf
+python-pptx
+fpdf2
+openai
+python-dotenv
+tqdm

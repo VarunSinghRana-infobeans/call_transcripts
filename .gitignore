@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+.ppt_renderer/
+venv/
+env/
+.venv/
+
+# Environment variables
+.env
+.env.local
+
+# Generated outputs
+output/
+ppt_screenshots/
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
