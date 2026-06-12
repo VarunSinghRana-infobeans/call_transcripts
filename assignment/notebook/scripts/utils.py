@@ -26,14 +26,14 @@ from datetime import datetime
 # ---------------------------------------------------------------------------
 
 # This file is at: assignment/notebook/scripts/utils.py
-# Dataset is at:    interview-assignment/dataset/
+# Dataset is at:    assignment/notebook/dat/dataset/
 # Output goes to:   assignment/notebook/output/<run_name>/
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 NOTEBOOK_DIR = SCRIPT_DIR.parent.resolve()
 PROJECT_ROOT = NOTEBOOK_DIR.parent.parent.resolve()
 
-DATASET_DIR = PROJECT_ROOT / "interview-assignment" / "dataset"
+DATASET_DIR = NOTEBOOK_DIR / "dat" / "dataset"
 
 # Output directory: use env var if set (for pipeline runs), else timestamped
 _RUN_NAME = os.environ.get("OUTPUT_RUN_NAME", "")

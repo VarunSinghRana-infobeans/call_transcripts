@@ -266,8 +266,10 @@ Script numbers:
     print("=" * 60)
 
     # Pre-flight validation
-    dataset_dir = Path(__file__).parent.parent.parent / "interview-assignment" / "dataset"
-    # Fallback: try dataset at repo root
+    dataset_dir = Path(__file__).parent / "dat" / "dataset"
+    # Fallbacks: previous locations for backward compatibility
+    if not dataset_dir.exists():
+        dataset_dir = Path(__file__).parent.parent.parent / "interview-assignment" / "dataset"
     if not dataset_dir.exists():
         dataset_dir = Path(__file__).parent.parent.parent / "dataset"
     if not preflight_checks(dataset_dir):
