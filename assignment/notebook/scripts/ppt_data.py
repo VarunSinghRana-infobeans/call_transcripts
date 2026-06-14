@@ -99,6 +99,7 @@ class PresentationData:
     medium_risk_calls: list[dict] = field(default_factory=list)
     churn_narratives: list[dict] = field(default_factory=list)
     churn_signals: dict[str, int] = field(default_factory=dict)
+    renewal_risk: dict = field(default_factory=dict)
 
     # Features
     feature_keywords: dict[str, int] = field(default_factory=dict)
@@ -266,6 +267,7 @@ def load_presentation_data(output_dir: Path | None = None) -> PresentationData:
         data.churn_narratives.append(enriched)
 
     data.churn_signals = churn.get("signals", {})
+    data.renewal_risk = churn.get("renewal_risk", {})
 
     # Features
     features = load_json(output_dir / "05_feature_requests.json")

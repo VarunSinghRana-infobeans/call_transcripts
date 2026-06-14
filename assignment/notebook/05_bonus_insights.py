@@ -51,6 +51,7 @@ from utils import (
     load_all_calls,
     extract_meeting_title,
     extract_meeting_date,
+    extract_meeting_duration_minutes,
     extract_summary_text,
     create_chart_fig,
     save_chart,
@@ -95,6 +96,46 @@ def risk_level(score: int) -> str:
         return "Medium"
     else:
         return "High"
+
+
+def analyze_renewal_risk(calls: list[dict], type_map: dict) -> dict:
+    """Find calls that discuss renewal and flag the ones at risk.
+
+    A renewal mention by itself is neutral. It becomes risky when it co-occurs
+    with negative sentiment, competitor mentions, escalations, or product
+    dissatisfaction.
+    """
+    renewal_calls = []
+    risky_signals = ["competitor_mentioned", "escalation_requested", "product_dissatisfaction", "negative_sentiment_dominates"]
+    for call in calls:
+        text = f"{extract_summary_text(call)} {call.get('transcript', {})}".lower()
+        if "renewal" not in text:
+            continue
+        score, signals = score_churn_risk(call)
+        sentiment = (call.get("summary") or {}).get("sentimentScore", 3)
+        risk_flags = [s for s in signals if s in risky_signals]
+        is_risky = sentiment < 3 or len(risk_flags) > 0
+        account = extract_account_name(extract_meeting_title(call)) or "Unknown account"
+        renewal_calls.append({
+            "meeting_id": call["meeting_id"],
+            "title": extract_meeting_title(call),
+            "account": account,
+            "call_type": type_map.get(call["meeting_id"], "unknown"),
+            "sentiment_score": float(sentiment),
+            "churn_score": int(score),
+            "signals": signals,
+            "risk_flags": risk_flags,
+            "is_risky": is_risky,
+        })
+
+    renewal_calls.sort(key=lambda x: (x["is_risky"], x["churn_score"]), reverse=True)
+    risky = [c for c in renewal_calls if c["is_risky"]]
+    return {
+        "total_renewal_calls": len(renewal_calls),
+        "risky_renewal_calls": len(risky),
+        "risky_accounts": sorted(set(c["account"] for c in risky if c["account"] != "Unknown account")),
+        "calls": renewal_calls[:20],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +222,10 @@ def extract_report_subtypes(df_features: pd.DataFrame) -> list[dict]:
 
 
 def build_keyword_details(df_features: pd.DataFrame, keyword_counts: dict, type_map: dict, category_map: dict) -> dict:
-    """For each top keyword, compute call-type and category context plus example snippets."""
+    """For each top keyword, compute call-type and category context plus example snippets.
+
+    Counts are de-duplicated by call: one call mentioning a feature three times is one request.
+    """
     details = {}
     for kw in list(keyword_counts.keys())[:8]:
         rows = df_features[df_features["sentence"].str.lower().str.contains(kw, regex=False)].copy()
@@ -198,6 +242,7 @@ def build_keyword_details(df_features: pd.DataFrame, keyword_counts: dict, type_
             ex["sentence"] = ex["sentence"][:180]
         details[kw] = {
             "count": int(keyword_counts[kw]),
+            "call_count": int(rows["meeting_id"].nunique()),
             "dominant_call_type": top_type,
             "dominant_category": top_cat,
             "call_type_counts": {k: int(v) for k, v in type_counts.items()},
@@ -299,8 +344,13 @@ def build_recommendations(
     risk_distribution: dict,
     action_counts: dict,
     carry_forward_total: int,
+    renewal_risk: dict,
 ) -> list[dict]:
-    """Generate decision-ready recommendations: problem, evidence, solution, impact."""
+    """Generate brutally honest, expert-level recommendations.
+
+    Each recommendation states the real problem, the evidence, and a concrete
+    action — no corporate filler.
+    """
     ctx = load_analysis_context(output_dir)
     recs = []
 
@@ -309,22 +359,22 @@ def build_recommendations(
     report_detail = keyword_details.get(report_kw, {})
     report_examples = report_detail.get("examples", [])
     report_examples_titles = [e.get("title", "") for e in report_examples[:3]]
-    report_call_count = sum(report_detail.get("call_type_counts", {}).values()) or len(report_examples)
+    report_call_count = report_detail.get("call_count", sum(report_detail.get("call_type_counts", {}).values()) or len(report_examples))
     subtype_bullets = [f"{s['subtype']} ({s['count']})" for s in report_subtypes if s['subtype'] != 'general'][:3]
     mentions = report_detail.get("count", keyword_counts.get(report_kw, 0))
     recs.append({
         "rank": 1,
         "owner": "Product",
-        "title": f"Close the '{report_kw}' gap with exportable compliance reports",
-        "headline": f"'{report_kw.title()}' is the #1 specific signal ({mentions} mentions), driven by audit and compliance workflows.",
-        "problem": "Customers repeatedly ask for reports during audits, compliance reviews and incident reviews, but the experience is fragmented and not self-serve.",
+        "title": "Stop making customers beg for reports",
+        "headline": f"'{report_kw.title()}' is the #1 specific signal ({mentions} mentions across {report_call_count} calls).",
+        "problem": "Customers keep asking for audit, compliance and incident reports, but there is no self-serve export. Support and CS waste cycles producing the same documents manually.",
         "evidence": [
             f"{mentions} report mentions across {report_call_count} calls",
             f"Top contexts: {', '.join(subtype_bullets)}" if subtype_bullets else "",
             f"Mostly in {report_detail.get('dominant_call_type', 'unknown')} calls tagged '{report_detail.get('dominant_category', 'Other')}'",
         ],
-        "solution": "Ship exportable compliance/audit report templates (PDF/CSV) and an on-demand reporting engine. Prioritize SOC 2, ISO 27001 and incident reports.",
-        "expected_impact": "Reduces audit friction, shortens sales cycles, and cuts repetitive support requests.",
+        "solution": "Ship exportable report templates (PDF/CSV) for SOC 2, ISO 27001, HIPAA and incidents, plus an on-demand reporting engine so customers self-serve.",
+        "expected_impact": "Cuts repetitive support requests, shortens audit cycles, and removes a sales objection.",
         "source_calls": report_examples_titles,
         "metrics": {
             "mentions": mentions,
@@ -342,16 +392,16 @@ def build_recommendations(
         recs.append({
             "rank": 2,
             "owner": "Engineering",
-            "title": f"Prioritize fixes in '{topic}'",
+            "title": "Your platform is leaking trust — fix reliability first",
             "headline": f"{topic} × {ctype.title()} is the lowest sentiment zone ({problem.get('sentiment', 0)}/5, {problem.get('call_count', 0)} calls, {problem.get('negative_pct', 0)}% negative).",
-            "problem": "Incident and outage calls directly impact customers. SLA pressure and repeated downtime erode trust and create churn risk.",
+            "problem": "Incident and outage calls directly hit customers. Repeated downtime erodes trust faster than any feature can rebuild it.",
             "evidence": [
                 f"Lowest sentiment: {problem.get('sentiment', 0)}/5",
                 f"{problem.get('call_count', 0)} calls, {problem.get('negative_pct', 0)}% negative sentences",
                 "Outages, incidents and data gaps are the core drivers",
             ],
-            "solution": "Run a reliability sprint focused on outage root causes, detection coverage, runbooks, and proactive customer status communication.",
-            "expected_impact": "Improves retention in at-risk accounts and reduces escalation volume.",
+            "solution": "Run a 2-week reliability sprint: root-cause the top outages, close detection gaps, write runbooks, and communicate status proactively during incidents.",
+            "expected_impact": "Stops the biggest source of churn risk and reduces escalation volume.",
             "source_calls": [],
             "metrics": {
                 "sentiment": problem.get("sentiment", 0),
@@ -367,16 +417,16 @@ def build_recommendations(
         recs.append({
             "rank": 3,
             "owner": "Sales / CS / Support",
-            "title": "Standardize Billing & Contracts playbooks",
+            "title": "Clean up Billing & Contracts before the next renewal cycle",
             "headline": f"Billing & Contracts is the largest category ({top_cat.get('count', 0)} calls, {top_cat.get('pct_of_total', 0)}% of volume), concentrated in external calls ({top_cat.get('dominant_pct', 0)}%).",
-            "problem": "Seat overages, invoice disputes and renewal terms generate repeated friction, especially in external sales and renewal conversations.",
+            "problem": "Seat overages, invoice disputes and renewal terms generate repeated friction because reps and customers do not see the same usage numbers.",
             "evidence": [
                 f"{top_cat.get('count', 0)} calls tagged Billing & Contracts",
                 f"Dominant in {top_cat.get('dominant_call_type', 'external')} calls ({top_cat.get('dominant_pct', 0)}%)",
                 f"Category sentiment: {cat_sent}/5" if cat_sent is not None else "",
                 "Seat overages, invoice adjustments and renewal terms dominate",
             ],
-            "solution": "Create standardized renewal/quota playbooks and a self-service usage dashboard so reps and customers see the same numbers before renewal conversations.",
+            "solution": "Publish a self-serve usage dashboard and lock renewal/quota playbooks so every rep shows the same numbers before the conversation.",
             "expected_impact": "Fewer billing disputes, faster renewals, and clearer expansion paths.",
             "source_calls": [],
             "metrics": {
@@ -387,27 +437,28 @@ def build_recommendations(
             },
         })
 
-    # 4. Churn intervention
-    high_risk_count = risk_distribution.get("High", 0)
-    medium_risk_count = risk_distribution.get("Medium", 0)
-    top_risk_accounts = [a.get("account", "") for a in churn_narratives[:3]]
+    # 4. Renewal risk — separate healthy renewals from bleeding ones
+    renewal_total = renewal_risk.get("total_renewal_calls", 0)
+    renewal_risky = renewal_risk.get("risky_renewal_calls", 0)
+    risky_accounts = renewal_risk.get("risky_accounts", [])[:3]
+    risky_call_titles = [c.get("title", "") for c in renewal_risk.get("calls", [])[:3] if c.get("is_risky")]
     recs.append({
         "rank": 4,
         "owner": "Sales / Customer Success",
-        "title": f"Executive intervention for {high_risk_count} high-risk accounts",
-        "headline": f"{high_risk_count} high-risk + {medium_risk_count} medium-risk calls flagged by rule-based churn scoring.",
-        "problem": "A concentrated set of accounts shows multiple churn signals at once: negative sentiment, competitor mentions, escalations, executive involvement and product dissatisfaction.",
+        "title": "Rescue the renewal conversations that are bleeding",
+        "headline": f"{renewal_risky} of {renewal_total} renewal calls show churn signals — competitors, escalations or negative sentiment.",
+        "problem": "Not every renewal call is at risk, but the risky ones are obvious: negative tone, competitor mentions and escalations. If you treat all renewals the same, you miss the ones that need executive air cover.",
         "evidence": [
-            f"{high_risk_count} high-risk, {medium_risk_count} medium-risk calls",
-            "Top signals: escalation requested, product dissatisfaction, competitor mentions, executive involvement",
-            f"Top accounts: {', '.join(top_risk_accounts)}" if top_risk_accounts else "",
+            f"{renewal_total} calls discuss renewal",
+            f"{renewal_risky} are at risk due to negative sentiment, competitor mentions or escalations",
+            f"Risky accounts: {', '.join(risky_accounts)}" if risky_accounts else "",
         ],
-        "solution": "Assign an executive sponsor to every high-risk account and run a 30-day rescue plan with clear success milestones.",
-        "expected_impact": "Stems preventable churn and protects recurring revenue.",
-        "source_calls": [a.get("title", "") for a in churn_narratives[:3]],
+        "solution": "Tag every renewal call by risk score. Assign an executive sponsor to each at-risk renewal and run a 30-day rescue plan with clear exit criteria.",
+        "expected_impact": "Saves at-risk recurring revenue and surfaces which renewals are actually healthy.",
+        "source_calls": risky_call_titles,
         "metrics": {
-            "high_risk": high_risk_count,
-            "medium_risk": medium_risk_count,
+            "renewal_total": renewal_total,
+            "renewal_risky": renewal_risky,
         },
     })
 
@@ -415,9 +466,9 @@ def build_recommendations(
     recs.append({
         "rank": 5,
         "owner": "Operations / Analytics",
-        "title": "Build closed-loop action-item tracking",
+        "title": "Stop letting action items die in meeting notes",
         "headline": f"{carry_forward_total} open action items sit in call summaries without a visible owner pipeline.",
-        "problem": "Action items are captured in call summaries but not tracked across handoffs, so customer commitments slip between support, sales and success.",
+        "problem": "Action items are captured but not tracked across handoffs. Customer promises slip between support, sales and success because no one owns the follow-through.",
         "evidence": [
             f"{carry_forward_total} carry-forward actions extracted",
             f"Support: {action_counts.get('support', {}).get('avg_per_call', 0)} avg per call, External: {action_counts.get('external', {}).get('avg_per_call', 0)} avg per call",
@@ -548,22 +599,27 @@ def main():
     df_features = pd.DataFrame(feature_rows)
     print(f"Total feature-request sentences: {len(df_features)}")
 
-    # Count specific keywords by number of sentences that contain them
-    keyword_counts = {}
+    # Count specific keywords by unique calls (de-duplicated) and by mentions.
+    keyword_call_counts = {}
+    keyword_mention_counts = {}
     for kw in SPECIFIC_FEATURE_KEYWORDS:
-        count = df_features["sentence"].str.lower().str.contains(kw, regex=False).sum()
-        if count > 0:
-            keyword_counts[kw] = int(count)
-    keyword_counts = dict(sorted(keyword_counts.items(), key=lambda x: x[1], reverse=True))
+        mask = df_features["sentence"].str.lower().str.contains(kw, regex=False)
+        mention_count = int(mask.sum())
+        if mention_count > 0:
+            keyword_mention_counts[kw] = mention_count
+            keyword_call_counts[kw] = int(df_features.loc[mask, "meeting_id"].nunique())
+    # Rank by unique calls first, then by mention volume
+    keyword_call_counts = dict(sorted(keyword_call_counts.items(), key=lambda x: (x[1], keyword_mention_counts[x[0]]), reverse=True))
+    keyword_mention_counts = {kw: keyword_mention_counts[kw] for kw in keyword_call_counts}
 
     # Generic request phrases counted separately
     generic_count = 0
     for phrase in REQUEST_PHRASES:
         generic_count += df_features["sentence"].str.lower().str.contains(phrase, regex=False).sum()
-    print(f"\nSpecific feature signals: {sum(keyword_counts.values())} | Generic request phrases: {generic_count}")
-    print(f"\nTop specific feature keywords:")
-    for kw, count in list(keyword_counts.items())[:15]:
-        print(f"  {kw}: {count}")
+    print(f"\nSpecific feature signals: {sum(keyword_mention_counts.values())} mentions across {sum(keyword_call_counts.values())} call-keyword pairs | Generic request phrases: {generic_count}")
+    print(f"\nTop specific feature keywords (by unique calls, mentions shown):")
+    for kw in list(keyword_call_counts.keys())[:15]:
+        print(f"  {kw}: {keyword_call_counts[kw]} calls / {keyword_mention_counts[kw]} mentions")
 
     # ------------------------------------------------------------------
     # Escalation Funnel
@@ -609,19 +665,19 @@ def main():
     save_chart(fig, "05_churn_score_histogram.png")
     plt.close(fig)
 
-    # Feature request frequency chart (specific keywords only — no vague "feature request")
-    if keyword_counts:
+    # Feature request frequency chart by UNIQUE CALLS (one call = one request)
+    if keyword_call_counts:
         fig, ax = create_chart_fig("05_feature_requests.png")
-        top_kws = list(keyword_counts.items())[:12]
+        top_kws = list(keyword_call_counts.items())[:12]
         y_pos = range(len(top_kws))
         ax.barh(y_pos, [k[1] for k in top_kws], color="#1f77b4")
         ax.set_yticks(y_pos)
         ax.set_yticklabels([k[0] for k in top_kws])
         ax.invert_yaxis()
-        ax.set_xlabel("Mentions")
+        ax.set_xlabel("Unique Calls Requesting Feature")
         # value labels
         for i, (_, count) in enumerate(top_kws):
-            ax.text(count + 0.8, i, str(int(count)), va="center", fontsize=9)
+            ax.text(count + 0.2, i, str(int(count)), va="center", fontsize=9)
         ax.set_xlim(0, max(k[1] for k in top_kws) * 1.18)
         save_chart(fig, "05_feature_requests.png")
         plt.close(fig)
@@ -688,17 +744,19 @@ def main():
 
     # Feature details: context, subtypes and examples for the top keywords
     report_subtypes = extract_report_subtypes(df_features)
-    keyword_details = build_keyword_details(df_features, keyword_counts, type_map, category_map)
+    keyword_details = build_keyword_details(df_features, keyword_mention_counts, type_map, category_map)
 
     # Rich callouts for the PPT cards
     feature_callouts = []
-    for kw, count in list(keyword_counts.items())[:5]:
+    for kw, call_count in list(keyword_call_counts.items())[:5]:
         detail = keyword_details.get(kw, {})
         examples = detail.get("examples", [])
         example = examples[0] if examples else {}
         callouts = {
             "keyword": kw,
-            "count": int(count),
+            "count": int(call_count),
+            "mention_count": int(keyword_mention_counts.get(kw, 0)),
+            "call_count": int(detail.get("call_count", call_count)),
             "dominant_call_type": detail.get("dominant_call_type", "unknown"),
             "dominant_category": detail.get("dominant_category", "Other"),
             "sample_title": example.get("title", ""),
@@ -778,19 +836,60 @@ def main():
     save_chart(fig, "05_action_items_by_type.png")
     plt.close(fig)
 
+    # Action items + duration combo chart (for dataset overview)
+    duration_by_type = {}
+    for ctype in ["support", "external", "internal"]:
+        ctype_calls = [c for c in calls if type_map.get(c["meeting_id"]) == ctype]
+        durations = [extract_meeting_duration_minutes(c) for c in ctype_calls]
+        durations = [d for d in durations if d > 0]
+        duration_by_type[ctype] = round(sum(durations) / len(durations), 1) if durations else 0.0
+
+    fig, ax = create_chart_fig("05_action_items_duration.png")
+    x = range(len(ctypes))
+    bars = ax.bar(x, avgs, color="#1a237e", label="Avg action items")
+    ax.set_ylabel("Avg Action Items per Call", color="#1a237e")
+    ax.tick_params(axis="y", labelcolor="#1a237e")
+    ax.set_xticks(x)
+    ax.set_xticklabels(ctypes)
+    for bar, val in zip(bars, avgs):
+        ax.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.05,
+                f"{val:.1f}", ha="center", va="bottom", fontsize=8, color="#1a237e")
+
+    ax2 = ax.twinx()
+    line = ax2.plot(x, [duration_by_type[c] for c in ctypes], color="#ff6b35", marker="o", linewidth=2, label="Avg duration (min)")
+    ax2.set_ylabel("Avg Duration (min)", color="#ff6b35")
+    ax2.tick_params(axis="y", labelcolor="#ff6b35")
+    ax.set_title("Action Items & Call Duration by Type")
+    # Combined legend
+    lines1, labels1 = ax.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax.legend(lines1 + lines2, labels1 + labels2, loc="upper right")
+    save_chart(fig, "05_action_items_duration.png")
+    plt.close(fig)
+
+    # ------------------------------------------------------------------
+    # Renewal risk
+    # ------------------------------------------------------------------
+    renewal_risk = analyze_renewal_risk(calls, type_map)
+    print(f"\n--- Renewal Risk ---")
+    print(f"  Renewal calls: {renewal_risk['total_renewal_calls']}")
+    print(f"  At-risk renewals: {renewal_risk['risky_renewal_calls']}")
+    print(f"  Risky accounts: {', '.join(renewal_risk['risky_accounts'][:5])}")
+
     # ------------------------------------------------------------------
     # Recommendations
     # ------------------------------------------------------------------
     risk_distribution = df_churn["risk_level"].value_counts().to_dict()
     recommendations = build_recommendations(
         OUTPUT_DIR,
-        keyword_counts,
+        keyword_mention_counts,
         keyword_details,
         report_subtypes,
         churn_narratives,
         risk_distribution,
         action_counts,
         len(carry_forward_actions),
+        renewal_risk,
     )
     print("\n--- Evidence-Based Recommendations ---")
     for r in recommendations:
@@ -806,15 +905,18 @@ def main():
         "high_risk_calls": high_risk[["meeting_id", "title", "churn_score", "signals"]].to_dict("records"),
         "medium_risk_calls": med_risk[["meeting_id", "title", "churn_score", "signals"]].to_dict("records"),
         "churn_narratives": churn_narratives,
+        "renewal_risk": renewal_risk,
         "scoring_method": "Feature-based point system",
         "signals": {k: v["points"] for k, v in CHURN_SIGNALS.items()},
     }, "05_churn_scores.json")
 
     save_json({
         "total_mentions": int(len(df_features)),
-        "specific_total": int(sum(keyword_counts.values())),
+        "specific_total": int(sum(keyword_mention_counts.values())),
+        "specific_call_total": int(sum(keyword_call_counts.values())),
         "generic_phrase_count": int(generic_count),
-        "top_keywords": keyword_counts,
+        "top_keywords": keyword_call_counts,
+        "mention_counts": keyword_mention_counts,
         "report_subtypes": report_subtypes,
         "keyword_details": keyword_details,
         "feature_callouts": feature_callouts,

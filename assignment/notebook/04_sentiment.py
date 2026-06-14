@@ -208,6 +208,24 @@ def main():
     save_chart(fig, "04_sentiment_boxplot.png")
     plt.close(fig)
 
+    # Sentiment score distribution by call type (violin plot for the dataset overview)
+    fig, ax = create_chart_fig("04_sentiment_score_distribution.png")
+    positions = [1, 2, 3]
+    colors = ["#ff7f0e", "#2ca02c", "#1f77b4"]
+    parts = ax.violinplot(data_to_plot, positions=positions, showmeans=True, showmedians=True)
+    for pc, color in zip(parts["bodies"], colors):
+        pc.set_facecolor(color)
+        pc.set_alpha(0.6)
+        pc.set_edgecolor(color)
+    ax.set_xticks(positions)
+    ax.set_xticklabels(["support", "external", "internal"])
+    ax.set_ylabel("Sentiment Score")
+    ax.set_title("Sentiment Score Distribution by Call Type")
+    ax.set_ylim(0, 5)
+    ax.axhline(y=3, color="gray", linestyle="--", linewidth=0.8, alpha=0.5)
+    save_chart(fig, "04_sentiment_score_distribution.png")
+    plt.close(fig)
+
     # Overall sentiment stacked bar by type
     sentiment_by_type = df_typed.groupby(["call_type", "overall_sentiment"]).size().unstack(fill_value=0)
     fig, ax = create_chart_fig("04_sentiment_stacked_by_type.png")

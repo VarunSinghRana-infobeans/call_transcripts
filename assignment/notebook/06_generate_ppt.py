@@ -494,7 +494,7 @@ def add_title_slide(prs, data: PresentationData):
     kpis = [
         (data.total_calls, "Calls Analysed", C_PRIMARY),
         (3, "Call Types", C_PRIMARY),
-        (specific_total, "Feature Signals", C_PRIMARY),
+        (specific_total, "Feature Requests", C_PRIMARY),
         (data.risk_distribution.high, "Churn Flags", C_ACCENT),
     ]
     box_w = Inches(2.05)
@@ -524,7 +524,7 @@ def add_executive_summary_slide(prs, data: PresentationData):
          f"{worst_zone.get('topic', 'N/A')} × {worst_zone.get('call_type', 'support').title()} scores {fmt_num(worst_zone.get('sentiment', 0))}/5 — the lowest zone in the dataset. Average overall sentiment is {fmt_num(avg_sentiment)}/5.",
          C_AMBER),
         ("📣", f"'{top_feature[0].title()}' dominates feature asks",
-         f"{top_feature[1]} mentions make it the clearest PM priority. Export and reporting gaps drive repeated friction across support and external calls.",
+         f"{top_feature[1]} calls requested it — the clearest PM priority. Export and reporting gaps drive repeated friction across support and external calls.",
          C_SECONDARY),
     ]
 
@@ -579,6 +579,7 @@ def add_pipeline_slide(prs):
 
 
 def add_dataset_slide(prs, data: PresentationData):
+    """Rich dataset overview: KPIs + 2x2 chart grid."""
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     add_slide_title(slide, "Dataset Overview",
                     f"{data.total_calls} calls from Aegis dataset · {data.date_min} to {data.date_max}")
@@ -592,7 +593,7 @@ def add_dataset_slide(prs, data: PresentationData):
     ]
     # 4 tiles must fit in 9" content width with 0.12" gaps
     box_w = Inches(2.16)
-    box_h = Inches(1.05)
+    box_h = Inches(0.95)
     add_kpi_row(slide, kpis, CONTENT_Y, box_w, box_h)
 
     if data.total_calls > 0:
@@ -604,22 +605,34 @@ def add_dataset_slide(prs, data: PresentationData):
     else:
         breakdown = "Support: 0 · External: 0 · Internal: 0"
 
-    add_text(slide, MARGIN, Inches(2.50), CONTENT_W, Inches(0.30),
+    add_text(slide, MARGIN, Inches(2.35), CONTENT_W, Inches(0.25),
              breakdown, FONT_BODY, bold=True, color=C_PRIMARY, align=PP_ALIGN.CENTER)
 
-    add_chart_if_exists(slide, "02_call_types_distribution.png", MARGIN + Inches(0.8), Inches(2.90), Inches(7.4), Inches(2.4))
+    # 2x2 chart grid to remove whitespace and give a complete snapshot
+    chart_w = Inches(4.75)
+    chart_h = Inches(1.45)
+    gap = Inches(0.12)
+    grid_y = Inches(2.62)
+    left_x = MARGIN
+    right_x = MARGIN + chart_w + gap
 
-    # Low/High insight tile
-    card_h = Inches(0.70)
+    add_chart_if_exists(slide, "02_call_types_distribution.png", left_x, grid_y, chart_w, chart_h)
+    add_chart_if_exists(slide, "04_sentiment_score_distribution.png", right_x, grid_y, chart_w, chart_h)
+    add_chart_if_exists(slide, "03_top_business_categories.png", left_x, grid_y + chart_h + gap, chart_w, chart_h)
+    add_chart_if_exists(slide, "05_action_items_duration.png", right_x, grid_y + chart_h + gap, chart_w, chart_h)
+
+    # Conclusion footer
+    card_h = Inches(0.55)
+    footer_y = grid_y + 2 * chart_h + 2 * gap + Inches(0.04)
     if data.total_calls > 0:
         insight_text = (
-            f"Conclusion: Support makes up {round(100*data.support_count/data.total_calls)}% of volume. "
-            f"External calls are smallest ({round(100*data.external_count/data.total_calls)}%) but carry the highest churn and feature-ask intensity."
+            f"Conclusion: Support dominates volume ({round(100*data.support_count/data.total_calls)}%). "
+            f"External calls are smallest but carry the highest churn and feature-ask intensity."
         )
     else:
         insight_text = "Conclusion: No call type data available."
-    add_card(slide, MARGIN, Inches(5.05), CONTENT_W, card_h, line=C_SECONDARY)
-    add_text(slide, MARGIN + Inches(0.12), Inches(5.12), CONTENT_W - Inches(0.24), Inches(0.55),
+    add_card(slide, MARGIN, footer_y, CONTENT_W, card_h, line=C_SECONDARY)
+    add_text(slide, MARGIN + Inches(0.12), footer_y + Inches(0.08), CONTENT_W - Inches(0.24), Inches(0.40),
              fit_text(insight_text, CONTENT_W - Inches(0.24), FONT_TINY, 2), FONT_TINY, color=C_TEXT)
 
     check(slide, "Dataset")
@@ -822,6 +835,15 @@ def add_strong_zones_slide(prs, data: PresentationData):
                  FONT_TINY, color=C_LIGHT)
         add_text(slide, x + Inches(0.12), base_y + Inches(0.66), card_w - Inches(0.24), Inches(0.78),
                  why, FONT_TINY, color=C_TEXT)
+
+    # Scale footer so 4.8 is unambiguous
+    scale_footer = (
+        "Sentiment scale: 1-2 = very negative/negative, 3 = neutral/mixed, "
+        "4 = positive (relationship/product strength), 5 = very positive (advocacy moment)."
+    )
+    add_text(slide, MARGIN, Inches(5.40), CONTENT_W, Inches(0.30),
+             fit_text(scale_footer, CONTENT_W, FONT_MICRO, 2), FONT_MICRO, color=C_LIGHT, align=PP_ALIGN.CENTER)
+
     check(slide, "Strong Zones")
     return slide
 
@@ -886,11 +908,83 @@ def add_churn_slide(prs, data: PresentationData):
     return slide
 
 
-def add_feature_slide(prs, data: PresentationData):
+def add_renewal_risk_slide(prs, data: PresentationData):
+    """Show which renewal conversations are healthy and which are bleeding."""
     slide = prs.slides.add_slide(prs.slide_layouts[6])
-    total_signals = sum(data.feature_keywords.values())
+    renewal = data.renewal_risk
+    total = renewal.get("total_renewal_calls", 0)
+    risky = renewal.get("risky_renewal_calls", 0)
+    healthy = total - risky
+    risky_accounts = renewal.get("risky_accounts", [])
+    add_slide_title(slide, "Renewal Risk",
+                    "Renewal calls split into healthy vs. at-risk by sentiment and churn signals.")
+
+    # KPI row
+    kpis = [
+        (total, "Renewal Calls", C_PRIMARY),
+        (risky, "At-Risk Renewals", C_RED),
+        (healthy, "Healthy Renewals", C_GREEN),
+        (len(risky_accounts), "Risky Accounts", C_AMBER),
+    ]
+    box_w = Inches(2.16)
+    box_h = Inches(0.85)
+    add_kpi_row(slide, kpis, CONTENT_Y, box_w, box_h)
+
+    # At-risk calls list
+    add_text(slide, MARGIN, CONTENT_Y + Inches(1.05), CONTENT_W, Inches(0.30),
+             "At-risk renewal calls (negative sentiment, competitor mentions, or escalations):",
+             FONT_BODY, bold=True, color=C_RED)
+
+    calls = [c for c in renewal.get("calls", []) if c.get("is_risky")][:5]
+    card_h = Inches(0.76)
+    y = CONTENT_Y + Inches(1.38)
+    flag_label = {
+        "negative_sentiment_dominates": "negative tone",
+        "competitor_mentioned": "competitor",
+        "escalation_requested": "escalation",
+        "product_dissatisfaction": "product dissatisfaction",
+    }
+    for call in calls:
+        add_card(slide, MARGIN, y, CONTENT_W, card_h, line=C_RED)
+        title = fit_text(call.get("title", "Unknown"), CONTENT_W - Inches(0.24), FONT_SMALL, 1)
+        add_text(slide, MARGIN + Inches(0.10), y + Inches(0.08), CONTENT_W - Inches(0.24), Inches(0.24),
+                 title, FONT_SMALL, bold=True, color=C_TEXT)
+        account = call.get("account", "Unknown account")
+        left_info = f"Account: {account}  |  {call.get('call_type', 'unknown').title()} call"
+        right_info = f"Sentiment: {call.get('sentiment_score', 0)}/5  |  Score: {call.get('churn_score', 0)}"
+        add_text(slide, MARGIN + Inches(0.10), y + Inches(0.34), Inches(4.6), Inches(0.20),
+                 left_info, FONT_TINY, color=C_LIGHT)
+        add_text(slide, MARGIN + Inches(5.0), y + Inches(0.34), Inches(4.6), Inches(0.20),
+                 right_info, FONT_TINY, color=C_LIGHT, align=PP_ALIGN.RIGHT)
+        flags = "  |  ".join(flag_label.get(s, s.replace("_", " ")) for s in call.get("risk_flags", [])[:3])
+        add_text(slide, MARGIN + Inches(0.10), y + Inches(0.56), CONTENT_W - Inches(0.24), Inches(0.18),
+                 fit_text(f"Risk flags: {flags}", CONTENT_W - Inches(0.24), FONT_MICRO, 1), FONT_MICRO, color=C_RED)
+        y += card_h + Inches(0.06)
+
+    # Bottom insight
+    if total > 0:
+        insight = (
+            f"Conclusion: {risky} of {total} renewal calls are at risk ({round(100*risky/total)}%). "
+            f"Renewal discussion alone is neutral; risk comes from negative sentiment, competitor mentions, or escalations."
+        )
+    else:
+        insight = "Conclusion: No renewal calls detected."
+    footer_y = y + Inches(0.08)
+    add_card(slide, MARGIN, footer_y, CONTENT_W, Inches(0.50), line=C_SECONDARY)
+    add_text(slide, MARGIN + Inches(0.12), footer_y + Inches(0.07), CONTENT_W - Inches(0.24), Inches(0.36),
+             fit_text(insight, CONTENT_W - Inches(0.24), FONT_TINY, 2), FONT_TINY, color=C_TEXT)
+
+    check(slide, "Renewal Risk")
+    return slide
+
+
+def add_feature_slide(prs, data: PresentationData):
+    """Feature requests counted by unique calls (one call = one request)."""
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    total_calls = sum(data.feature_keywords.values())
+    total_mentions = sum(c.get("mention_count", 0) for c in data.feature_callouts)
     add_slide_title(slide, "Feature Request Intelligence",
-                    f"{total_signals} specific feature signals extracted. Generic request phrases excluded from ranking.")
+                    f"{total_calls} unique calls requested a specific feature ({total_mentions} total mentions). One call = one request.")
 
     add_chart_if_exists(slide, "05_feature_requests.png", CHART_X, CONTENT_Y, CHART_W, Inches(3.6))
 
@@ -906,12 +1000,11 @@ def add_feature_slide(prs, data: PresentationData):
 
     card_h = Inches(0.82)
     y = CONTENT_Y + Inches(0.32)
-    for i, (kw, count) in enumerate(top_features):
+    for i, (kw, call_count) in enumerate(top_features):
         prio = prio_for_rank(i)
         prio_color = C_RED if prio == "P1" else (C_AMBER if prio == "P2" else C_GREEN)
         callout = next((c for c in data.feature_callouts if c["keyword"] == kw), {})
-        sample_title = callout.get("sample_title", "")
-        sample_sentence = callout.get("sample_sentence", "")
+        mention_count = callout.get("mention_count", 0)
         dominant_type = callout.get("dominant_call_type", "unknown")
         dominant_cat = callout.get("dominant_category", "Other")
         subtypes = callout.get("subtypes", [])
@@ -923,18 +1016,18 @@ def add_feature_slide(prs, data: PresentationData):
         add_text(slide, RIGHT_X + Inches(0.54), y + Inches(0.10), Inches(1.55), Inches(0.24),
                  kw_display, FONT_SMALL, bold=True, color=C_TEXT)
         add_text(slide, RIGHT_X + Inches(2.10), y + Inches(0.10), Inches(1.15), Inches(0.24),
-                 f"{count} mentions", FONT_TINY, color=C_LIGHT, align=PP_ALIGN.RIGHT)
+                 f"{call_count} calls", FONT_TINY, color=C_LIGHT, align=PP_ALIGN.RIGHT)
 
         # Context line: call type + category
         ctx_line = f"Mostly {dominant_type} · {dominant_cat}"
         add_text(slide, RIGHT_X + Inches(0.54), y + Inches(0.34), RIGHT_W - Inches(0.64), Inches(0.20),
                  ctx_line, FONT_MICRO, color=C_LIGHT)
 
-        # Detail line: subtypes when available; otherwise a concise channel note
+        # Detail line: subtypes when available; otherwise mention count
         if subtypes:
             detail = "Top contexts: " + ", ".join(f"{s['subtype']} ({s['count']})" for s in subtypes[:2])
         else:
-            detail = f"Primary channel: {dominant_type} · {dominant_cat}"
+            detail = f"{mention_count} mentions — primary channel: {dominant_type}"
         add_text(slide, RIGHT_X + Inches(0.54), y + Inches(0.54), RIGHT_W - Inches(0.64), Inches(0.34),
                  detail, FONT_MICRO, color=C_TEXT)
 
@@ -1093,15 +1186,15 @@ def _add_single_recommendation_slide(prs, rec: dict):
 
     # Two-column layout: Problem | Recommended Action
     col_w = Inches(4.55)
-    card_h = Inches(1.35)
+    card_h = Inches(1.50)
     y = CONTENT_Y + Inches(0.35)
 
     # Problem card
     add_card(slide, MARGIN, y, col_w, card_h, line=C_RED)
     add_text(slide, MARGIN + Inches(0.10), y + Inches(0.08), col_w - Inches(0.20), Inches(0.26),
              "Problem", FONT_SMALL, bold=True, color=C_RED)
-    problem = fit_text(rec.get("problem", ""), col_w - Inches(0.20), FONT_TINY, 4)
-    add_text(slide, MARGIN + Inches(0.10), y + Inches(0.36), col_w - Inches(0.20), Inches(0.90),
+    problem = fit_text(rec.get("problem", ""), col_w - Inches(0.20), FONT_TINY, 5)
+    add_text(slide, MARGIN + Inches(0.10), y + Inches(0.36), col_w - Inches(0.20), Inches(1.05),
              problem, FONT_TINY, color=C_TEXT)
 
     # Solution card
@@ -1109,8 +1202,8 @@ def _add_single_recommendation_slide(prs, rec: dict):
     add_card(slide, x2, y, col_w, card_h, line=C_SECONDARY)
     add_text(slide, x2 + Inches(0.10), y + Inches(0.08), col_w - Inches(0.20), Inches(0.26),
              "Recommended Action", FONT_SMALL, bold=True, color=C_SECONDARY)
-    solution = fit_text(rec.get("solution", ""), col_w - Inches(0.20), FONT_TINY, 4)
-    add_text(slide, x2 + Inches(0.10), y + Inches(0.36), col_w - Inches(0.20), Inches(0.90),
+    solution = fit_text(rec.get("solution", ""), col_w - Inches(0.20), FONT_TINY, 5)
+    add_text(slide, x2 + Inches(0.10), y + Inches(0.36), col_w - Inches(0.20), Inches(1.05),
              solution, FONT_TINY, color=C_TEXT)
 
     # Evidence card (full width below)
@@ -1284,6 +1377,7 @@ def main():
             ("Problem Zones", add_problem_zones_slide, True),
             ("Strong Zones", add_strong_zones_slide, True),
             ("Churn", add_churn_slide, True),
+            ("Renewal Risk", add_renewal_risk_slide, True),
             ("Features", add_feature_slide, True),
             ("Action Items", add_action_items_slide, True),
             ("Carry-Forward Actions", add_carry_forward_slide, True),

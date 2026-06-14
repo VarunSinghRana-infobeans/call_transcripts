@@ -644,6 +644,31 @@ def main():
     # Business taxonomy stacked bar
     plot_taxonomy_by_call_type(business_taxonomy["by_call_type"], len(calls))
 
+    # Top business categories bar chart (for dataset overview)
+    primary_counts = business_taxonomy.get("primary_counts", {})
+    categories_for_chart = list(BUSINESS_TAXONOMY.keys()) + ["Other"]
+    color_map = dict(zip(categories_for_chart, CATEGORY_PALETTE))
+    top_counts = sorted(
+        ((cat, int(cnt)) for cat, cnt in primary_counts.items() if cat != "Other"),
+        key=lambda x: x[1],
+    )
+    if top_counts:
+        fig, ax = create_chart_fig("03_top_business_categories.png")
+        cats, counts = zip(*top_counts)
+        colors = [color_map.get(c, "#7f7f7f") for c in cats]
+        ax.barh(range(len(cats)), counts, color=colors)
+        ax.set_yticks(range(len(cats)))
+        ax.set_yticklabels(cats)
+        ax.invert_yaxis()
+        ax.set_xlabel("Number of Calls")
+        ax.set_title("Top Business Categories")
+        for i, v in enumerate(counts):
+            ax.text(v + 0.3, i, str(v), va="center", fontsize=9)
+        ax.set_xlim(0, max(counts) * 1.18)
+        plt.tight_layout()
+        save_chart(fig, "03_top_business_categories.png")
+        plt.close(fig)
+
     # ------------------------------------------------------------------
     # Save
     # ------------------------------------------------------------------
