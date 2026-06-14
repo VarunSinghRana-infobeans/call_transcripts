@@ -38,6 +38,7 @@ from utils import (
     extract_summary_text,
     count_transcript_sentences,
     extract_speaker_count,
+    create_chart_fig,
     save_chart,
     save_csv,
     save_json,
@@ -125,7 +126,7 @@ def main():
     print("\n--- Generating charts ---")
 
     # Duration histogram
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = create_chart_fig("01_duration_distribution.png")
     ax.hist(df["duration_minutes"], bins=20, edgecolor="black")
     ax.set_xlabel("Duration (minutes)")
     ax.set_ylabel("Number of calls")
@@ -134,7 +135,7 @@ def main():
     plt.close(fig)
 
     # Sentiment score histogram
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = create_chart_fig("01_sentiment_distribution.png")
     ax.hist(df["sentiment_score"], bins=20, edgecolor="black", color="coral")
     ax.set_xlabel("Sentiment Score (0=negative, 5=positive)")
     ax.set_ylabel("Number of calls")
@@ -143,7 +144,7 @@ def main():
     plt.close(fig)
 
     # Overall sentiment bar chart
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = create_chart_fig("01_overall_sentiment.png")
     sentiment_counts = df["overall_sentiment"].value_counts()
     ax.bar(sentiment_counts.index, sentiment_counts.values, color=["green", "orange", "red", "gray"])
     ax.set_xlabel("Overall Sentiment")
@@ -156,7 +157,7 @@ def main():
     df["date"] = pd.to_datetime(df["date"])
     daily_counts = df.groupby(df["date"].dt.date).size()
 
-    fig, ax = plt.subplots(figsize=(10, 5))
+    fig, ax = create_chart_fig("01_call_volume_over_time.png")
     ax.plot(daily_counts.index, daily_counts.values, marker="o")
     ax.set_xlabel("Date")
     ax.set_ylabel("Number of calls")

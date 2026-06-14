@@ -48,6 +48,7 @@ from utils import (
     load_all_calls,
     extract_meeting_title,
     extract_meeting_date,
+    create_chart_fig,
     save_chart,
     save_csv,
     save_json,
@@ -168,7 +169,7 @@ def main():
     print("\n--- Generating charts ---")
 
     # Sentiment score trend by call type
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig, ax = create_chart_fig("04_sentiment_trend_by_type.png")
     for ctype, color in [("support", "orange"), ("external", "green"), ("internal", "blue")]:
         data = weekly[weekly["call_type"] == ctype]
         if len(data) > 0:
@@ -184,7 +185,7 @@ def main():
     plt.close(fig)
 
     # Negative sentiment percentage trend
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig, ax = create_chart_fig("04_negative_sentiment_trend.png")
     for ctype, color in [("support", "orange"), ("external", "green"), ("internal", "blue")]:
         data = weekly[weekly["call_type"] == ctype]
         if len(data) > 0:
@@ -199,7 +200,7 @@ def main():
     plt.close(fig)
 
     # Sentiment score distribution by call type (box plot)
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = create_chart_fig("04_sentiment_boxplot.png")
     data_to_plot = [df_typed[df_typed["call_type"] == ct]["sentiment_score"].values for ct in ["support", "external", "internal"]]
     ax.boxplot(data_to_plot, tick_labels=["support", "external", "internal"])
     ax.set_ylabel("Sentiment Score")
@@ -209,20 +210,50 @@ def main():
 
     # Overall sentiment stacked bar by type
     sentiment_by_type = df_typed.groupby(["call_type", "overall_sentiment"]).size().unstack(fill_value=0)
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = create_chart_fig("04_sentiment_stacked_by_type.png")
     sentiment_by_type.plot(kind="bar", stacked=True, ax=ax, colormap="RdYlGn")
     ax.set_xlabel("Call Type")
     ax.set_ylabel("Number of Calls")
     ax.set_title("Overall Sentiment by Call Type")
-    ax.legend(title="Sentiment", bbox_to_anchor=(1.05, 1), loc="upper left")
+    # Legend on the right; the target figure is wide enough to accommodate it.
+    ax.legend(title="Sentiment", bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=10)
     plt.tight_layout()
     save_chart(fig, "04_sentiment_stacked_by_type.png")
     plt.close(fig)
 
     # ------------------------------------------------------------------
-    # Sentiment by Topic cross-tab
+    # Sentiment scale interpretation
     # ------------------------------------------------------------------
-    print("\n--- Sentiment by Topic Cross-Analysis ---")
+    def interpret_score(score: float) -> str:
+        if score >= 4.5:
+            return "Very positive"
+        if score >= 3.5:
+            return "Positive"
+        if score >= 2.5:
+            return "Neutral / mixed"
+        if score >= 1.5:
+            return "Negative"
+        return "Very negative"
+
+    scale = {
+        "1.0-1.9": "Very negative — urgent intervention",
+        "2.0-2.9": "Negative — issue driving dissatisfaction",
+        "3.0-3.9": "Neutral / mixed — resolved or ambiguous",
+        "4.0-4.9": "Positive — relationship or product strength",
+        "5.0": "Very positive — strong advocacy moment",
+    }
+
+    overall_mean = float(df["sentiment_score"].mean())
+    sentiment_interpretation = {
+        "scale": scale,
+        "overall_label": interpret_score(overall_mean),
+        "overall_score": round(overall_mean, 2),
+    }
+
+    # ------------------------------------------------------------------
+    # Sentiment by Business Taxonomy cross-tab
+    # ------------------------------------------------------------------
+    print("\n--- Sentiment by Business Taxonomy Cross-Analysis ---")
     topics_path = OUTPUT_DIR / "topics.json"
     topic_cross = {}
     problem_zones = []
@@ -231,45 +262,134 @@ def main():
     if topics_path.exists():
         import json
         topics_data = json.loads(topics_path.read_text())
-        assignments = topics_data.get("assignments", [])
-        df_topics = pd.DataFrame(assignments)[["meeting_id", "topic_name"]]
+        biz_assignments = topics_data.get("business_taxonomy", {}).get("assignments", [])
+        if biz_assignments:
+            df_topics = pd.DataFrame(biz_assignments)[["meeting_id", "primary"]]
+            df_topics = df_topics.rename(columns={"primary": "topic_name"})
+        else:
+            assignments = topics_data.get("assignments", [])
+            df_topics = pd.DataFrame(assignments)[["meeting_id", "topic_name"]]
         df_merged = df_typed.merge(df_topics, on="meeting_id", how="left")
-        df_merged["topic_name"] = df_merged["topic_name"].fillna("Noise")
+        df_merged["topic_name"] = df_merged["topic_name"].fillna("Other")
 
         cross = df_merged.groupby(["call_type", "topic_name"]).agg({
-            "sentiment_score": "mean",
+            "sentiment_score": ["mean", "count"],
             "negative_pct": "mean",
         }).round(2).reset_index()
+        cross.columns = ["call_type", "topic_name", "sentiment_score", "call_count", "negative_pct"]
+
+        # Build a lookup of example titles per zone for richer "why" text
+        title_lookup = dict(zip(df["meeting_id"], df["title"]))
+
+        def zone_why(zone_rows: pd.DataFrame, direction: str) -> str:
+            if zone_rows.empty:
+                return f"{direction} sentiment zone."
+            # Pick representative low/high calls
+            rep = zone_rows.sort_values("sentiment_score", ascending=(direction == "lowest")).head(3)
+            titles = [title_lookup.get(mid, "") for mid in rep["meeting_id"].tolist()]
+            titles = [t for t in titles if t]
+            if titles:
+                return f"{direction.capitalize()} sentiment zone. Example calls: {', '.join(t[:55] for t in titles[:2])}."
+            return f"{direction.capitalize()} sentiment zone ({len(zone_rows)} calls)."
 
         for ctype in ["support", "external", "internal"]:
             ctype_rows = cross[cross["call_type"] == ctype]
-            ctype_rows = ctype_rows[ctype_rows["topic_name"] != "Noise"]
+            ctype_rows = ctype_rows[ctype_rows["topic_name"] != "Other"]
             if len(ctype_rows) > 0:
                 topic_cross[ctype] = {}
                 for _, row in ctype_rows.iterrows():
                     topic_cross[ctype][row["topic_name"]] = {
                         "avg_sentiment": float(row["sentiment_score"]),
                         "negative_pct": float(row["negative_pct"]),
+                        "call_count": int(row["call_count"]),
                     }
                 # Problem zone: lowest sentiment
-                worst = ctype_rows.loc[ctype_rows["sentiment_score"].idxmin()]
+                worst_idx = ctype_rows["sentiment_score"].idxmin()
+                worst = ctype_rows.loc[worst_idx]
+                worst_calls = df_merged[
+                    (df_merged["call_type"] == ctype) &
+                    (df_merged["topic_name"] == worst["topic_name"])
+                ][["meeting_id", "sentiment_score"]]
                 problem_zones.append({
                     "call_type": ctype,
                     "topic": worst["topic_name"],
                     "sentiment": float(worst["sentiment_score"]),
-                    "why": f"Lowest sentiment in {ctype} calls.",
+                    "call_count": int(worst["call_count"]),
+                    "negative_pct": float(worst["negative_pct"]),
+                    "why": zone_why(worst_calls, "lowest"),
+                    "label": interpret_score(float(worst["sentiment_score"])),
                 })
                 # Strong zone: highest sentiment
-                best = ctype_rows.loc[ctype_rows["sentiment_score"].idxmax()]
+                best_idx = ctype_rows["sentiment_score"].idxmax()
+                best = ctype_rows.loc[best_idx]
+                best_calls = df_merged[
+                    (df_merged["call_type"] == ctype) &
+                    (df_merged["topic_name"] == best["topic_name"])
+                ][["meeting_id", "sentiment_score"]]
                 strong_zones.append({
                     "call_type": ctype,
                     "topic": best["topic_name"],
                     "sentiment": float(best["sentiment_score"]),
-                    "why": f"Highest sentiment in {ctype} calls.",
+                    "call_count": int(best["call_count"]),
+                    "negative_pct": float(best["negative_pct"]),
+                    "why": zone_why(best_calls, "highest"),
+                    "label": interpret_score(float(best["sentiment_score"])),
                 })
                 print(f"  {ctype}: worst={worst['topic_name']} ({worst['sentiment_score']}), best={best['topic_name']} ({best['sentiment_score']})")
     else:
         print("  topics.json not found. Skipping cross-analysis.")
+
+    # Overall problem/strong zones sorted by sentiment
+    problem_zones_sorted = sorted(problem_zones, key=lambda x: x["sentiment"])[:3]
+    strong_zones_sorted = sorted(strong_zones, key=lambda x: x["sentiment"], reverse=True)[:3]
+
+    # Pick a caution/watch zone: Churn & Risk if present, else second-worst overall
+    watch_zone = None
+    churn_risk_zones = [z for z in problem_zones if z["topic"] == "Churn & Risk"]
+    if churn_risk_zones:
+        watch_zone = sorted(churn_risk_zones, key=lambda x: x["sentiment"])[0]
+    elif len(problem_zones_sorted) > 1:
+        watch_zone = problem_zones_sorted[1]
+
+    # ------------------------------------------------------------------
+    # Heatmap: sentiment score by call type × business taxonomy category
+    # ------------------------------------------------------------------
+    if topics_path.exists() and biz_assignments:
+        # Order rows/columns for readability
+        row_order = ["support", "external", "internal"]
+        col_order = [
+            "Billing & Contracts", "Identity & Access", "Compliance & Audit",
+            "Platform Reliability", "Integrations & API", "Customer Success",
+            "Threat Detection", "Product & Roadmap", "Churn & Risk", "Internal Operations",
+        ]
+        pivot = cross.pivot(index="call_type", columns="topic_name", values="sentiment_score")
+        pivot = pivot.reindex(index=row_order, columns=col_order)
+
+        fig, ax = create_chart_fig("04_sentiment_heatmap_by_taxonomy.png")
+        # Prepare data array with NaN for empty cells
+        values = pivot.values
+        im = ax.imshow(values, cmap="RdYlGn", aspect="auto", vmin=1, vmax=5)
+
+        # Annotate cells
+        for i in range(len(row_order)):
+            for j in range(len(col_order)):
+                val = values[i, j]
+                if not pd.isna(val):
+                    text_color = "white" if val < 2.5 or val > 4.0 else "black"
+                    ax.text(j, i, f"{val:.1f}", ha="center", va="center", color=text_color, fontsize=9, fontweight="bold")
+
+        ax.set_xticks(range(len(col_order)))
+        ax.set_yticks(range(len(row_order)))
+        ax.set_xticklabels(col_order, rotation=30, ha="right")
+        ax.set_yticklabels(row_order)
+        ax.set_title("Sentiment Score by Call Type × Topic Category")
+        ax.set_xlabel("Topic Category")
+        ax.set_ylabel("Call Type")
+        cbar = fig.colorbar(im, ax=ax)
+        cbar.set_label("Avg Sentiment (1-5)")
+        plt.tight_layout()
+        save_chart(fig, "04_sentiment_heatmap_by_taxonomy.png")
+        plt.close(fig)
 
     # ------------------------------------------------------------------
     # Save
@@ -278,9 +398,11 @@ def main():
     save_csv(weekly, "04_sentiment_weekly.csv")
     save_json({
         "by_type": by_type.to_dict(),
+        "interpretation": sentiment_interpretation,
         "topic_cross": topic_cross,
-        "problem_zones": problem_zones,
-        "strong_zones": strong_zones,
+        "problem_zones": problem_zones_sorted,
+        "strong_zones": strong_zones_sorted,
+        "watch_zone": watch_zone,
         "total_calls_analyzed": len(df),
         "date_range": {"min": str(df["date"].min().date()), "max": str(df["date"].max().date())},
     }, "04_sentiment_stats.json")

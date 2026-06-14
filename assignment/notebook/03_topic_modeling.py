@@ -56,6 +56,7 @@ from sklearn.metrics import silhouette_score
 from utils import (
     load_all_calls,
     extract_summary_text,
+    create_chart_fig,
     save_chart,
     save_json,
     set_chart_style,
@@ -216,6 +217,206 @@ Justification: <one sentence>"""
     if not name or len(name) > 50 or "topic" in name.lower():
         return None, justification
     return name, justification
+
+
+# ---------------------------------------------------------------------------
+# Business taxonomy (10-category) — presented in the deck alongside clusters
+# ---------------------------------------------------------------------------
+
+BUSINESS_TAXONOMY = {
+    "Billing & Contracts": [
+        "billing", "invoice", "contract", "payment", "overage", "seat", "license",
+        "renewal", "cost", "pricing", "quote", "purchase order", "po", "budget",
+    ],
+    "Identity & Access": [
+        "sso", "single sign", "mfa", "multi-factor", "saml", "ldap", "identity",
+        "access", "provisioning", "deprovision", "role", "rbac", "permission",
+        "login", "authentication", "user account",
+    ],
+    "Compliance & Audit": [
+        "compliance", "audit", "soc", "iso", "hipaa", "gdpr", "pci", "regulator",
+        "framework", "certification", "evidence", "assessment", "auditor",
+    ],
+    "Platform Reliability": [
+        "outage", "incident", "downtime", "reliability", "availability", "sla",
+        "uptime", "failure", "degradation", "performance", "latency", "disruption",
+    ],
+    "Integrations & API": [
+        "api", "integration", "webhook", "connector", "sdk", "cli", "endpoint",
+        "rate limit", "token", "third-party", "sync", "api access",
+    ],
+    "Customer Success": [
+        "onboarding", "training", "qbr", "business review", "adoption", "usage",
+        "success", "check-in", "expansion", "health score", "relationship",
+    ],
+    "Threat Detection": [
+        "detect", "alert", "threat", "malware", "ioc", "signature", "false positive",
+        "detection", "monitoring", "siem", "anomaly", "investigation",
+    ],
+    "Product & Roadmap": [
+        "roadmap", "feature", "product", "release", "launch", "enhancement",
+        "request", "backlog", "sprint", "rollout", "deployment", "milestone",
+    ],
+    "Churn & Risk": [
+        "churn", "cancel", "competitor", "competition", "alternative", "switching",
+        "escalation", "escalate", "executive", "ceo", "cto", "dissatisfied",
+        "frustrated", "unhappy", "at risk", "renewal concern",
+    ],
+    "Internal Operations": [
+        "standup", "sprint", "retro", "planning", "engineering", "internal",
+        "all hands", "team sync", "postmortem", "retrospective", "roadmap planning",
+    ],
+}
+
+
+def score_taxonomy_categories(call: dict) -> dict[str, float]:
+    """Score each business category for a call using title, summary, and topics."""
+    title = (call.get("meeting_info") or {}).get("title", "").lower()
+    summary = extract_summary_text(call).lower()
+    topics = call.get("summary", {}).get("topics", [])
+    if isinstance(topics, str):
+        topics = [topics]
+    topics_text = " ".join(str(t).lower() for t in topics)
+    text = f"{title} {summary} {topics_text}"
+
+    scores = {}
+    for category, keywords in BUSINESS_TAXONOMY.items():
+        score = 0.0
+        for kw in keywords:
+            # Title matches weighted higher because title is a strong signal
+            count_title = title.count(kw)
+            count_body = (summary.count(kw) + topics_text.count(kw))
+            score += count_title * 2.0 + count_body * 1.0
+        scores[category] = score
+    return scores
+
+
+def assign_business_categories(calls: list[dict]) -> list[dict]:
+    """Return list of {meeting_id, primary, secondary, scores} for each call."""
+    assignments = []
+    for call in calls:
+        scores = score_taxonomy_categories(call)
+        sorted_cats = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+        primary = sorted_cats[0][0] if sorted_cats[0][1] > 0 else "Other"
+        secondary = None
+        if len(sorted_cats) > 1 and sorted_cats[1][1] > 0:
+            secondary = sorted_cats[1][0]
+        assignments.append({
+            "meeting_id": call["meeting_id"],
+            "title": (call.get("meeting_info") or {}).get("title", ""),
+            "primary": primary,
+            "secondary": secondary,
+            "scores": {k: round(v, 2) for k, v in scores.items()},
+        })
+    return assignments
+
+
+def build_business_taxonomy(calls: list[dict], type_map: dict) -> dict:
+    """Build category counts, cross-tab by call type, and top-category narratives."""
+    assignments = assign_business_categories(calls)
+    df_assign = pd.DataFrame(assignments)
+
+    # Overall counts
+    primary_counts = df_assign["primary"].value_counts().to_dict()
+
+    # Cross-tab by call type
+    df_assign["call_type"] = df_assign["meeting_id"].map(type_map).fillna("unknown")
+    by_type = {}
+    for ctype in ["support", "external", "internal"]:
+        subset = df_assign[df_assign["call_type"] == ctype]
+        counts = subset["primary"].value_counts().to_dict()
+        total = len(subset)
+        by_type[ctype] = {
+            "total": int(total),
+            "categories": {
+                cat: {"count": int(c), "pct": round(100 * c / total, 1) if total else 0}
+                for cat, c in counts.items()
+            },
+        }
+
+    # Top categories overall
+    top_categories = []
+    for cat, count in sorted(primary_counts.items(), key=lambda x: x[1], reverse=True)[:5]:
+        # Find the call type where this category is most dominant
+        best_type = None
+        best_pct = 0
+        for ctype, info in by_type.items():
+            cat_info = info["categories"].get(cat)
+            if cat_info and cat_info["pct"] > best_pct:
+                best_pct = cat_info["pct"]
+                best_type = ctype
+        top_categories.append({
+            "category": cat,
+            "count": int(count),
+            "pct_of_total": round(100 * count / len(calls), 1) if calls else 0,
+            "dominant_call_type": best_type,
+            "dominant_pct": best_pct,
+        })
+
+    # Narratives for the top 3 categories
+    narratives = {}
+    keyword_examples = {
+        "Billing & Contracts": "seat overages, invoice adjustments, renewal terms",
+        "Identity & Access": "SSO, MFA, RBAC, provisioning and deprovisioning",
+        "Compliance & Audit": "SOC 2, ISO 27001, HIPAA evidence and auditor workflows",
+        "Platform Reliability": "outages, SLA breaches, incident postmortems",
+        "Integrations & API": "webhooks, API rate limits, CLI and connector gaps",
+        "Customer Success": "onboarding, QBRs, adoption and expansion plays",
+        "Threat Detection": "alert tuning, false positives, detection coverage",
+        "Product & Roadmap": "feature requests, release timing, roadmap alignment",
+        "Churn & Risk": "escalations, competitor evaluations, renewal concerns",
+        "Internal Operations": "sprint planning, engineering standups, postmortems",
+    }
+    for cat_info in top_categories[:3]:
+        cat = cat_info["category"]
+        dominant_type = cat_info.get("dominant_call_type")
+        dominant_pct = cat_info.get("dominant_pct", 0)
+        support_str = by_type.get("support", {}).get("categories", {}).get(cat, {})
+
+        if dominant_type == "external":
+            narratives[cat] = f"Top topic for external calls ({dominant_pct}%). {keyword_examples.get(cat, '')} dominate."
+        elif dominant_type == "support" and cat in ["Platform Reliability", "Threat Detection"]:
+            narratives[cat] = f"Most prevalent in support calls ({support_str.get('pct', 0)}%). Drives negative sentiment when incidents hit customers."
+        elif dominant_type == "support":
+            narratives[cat] = f"Dominant in support calls ({support_str.get('pct', 0)}%). {keyword_examples.get(cat, '')}."
+        elif dominant_type == "internal":
+            narratives[cat] = f"Concentrated in internal calls ({dominant_pct}%). {keyword_examples.get(cat, '')}."
+        else:
+            narratives[cat] = f"{keyword_examples.get(cat, 'Recurring theme across calls')}."
+
+    return {
+        "assignments": assignments,
+        "primary_counts": {k: int(v) for k, v in primary_counts.items()},
+        "top_categories": top_categories,
+        "by_call_type": by_type,
+        "narratives": narratives,
+        "taxonomy": {k: v for k, v in BUSINESS_TAXONOMY.items()},
+    }
+
+
+def plot_taxonomy_by_call_type(by_call_type: dict, total_calls: int):
+    """Generate a stacked horizontal bar chart of category counts by call type."""
+    categories = list(BUSINESS_TAXONOMY.keys()) + ["Other"]
+    type_order = ["support", "external", "internal"]
+    colors = plt.cm.tab20c(np.linspace(0, 1, len(categories)))
+    color_map = dict(zip(categories, colors))
+
+    fig, ax = create_chart_fig("03_topic_distribution_by_type.png")
+    bottoms = {cat: 0 for cat in categories}
+    for ctype in type_order:
+        cat_counts = by_call_type.get(ctype, {}).get("categories", {})
+        counts = [cat_counts.get(cat, {}).get("count", 0) for cat in categories]
+        ax.barh(ctype, counts[0], left=bottoms[categories[0]], color=color_map[categories[0]], label=categories[0] if ctype == "support" else "")
+        for cat, count in zip(categories[1:], counts[1:]):
+            ax.barh(ctype, count, left=bottoms[cat], color=color_map[cat], label=cat if ctype == "support" else "")
+            bottoms[cat] += count
+
+    ax.set_xlabel("Number of Calls")
+    ax.set_title("Topic Category Distribution by Call Type")
+    ax.legend(title="Category", bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=8)
+    plt.tight_layout()
+    save_chart(fig, "03_topic_distribution_by_type.png")
+    plt.close(fig)
 
 
 def main():
@@ -379,25 +580,35 @@ def main():
         print("  02_call_types.csv not found. Skipping cross-tab.")
 
     # ------------------------------------------------------------------
+    # Business taxonomy
+    # ------------------------------------------------------------------
+    print("\n--- Building business taxonomy ---")
+    type_map = {}
+    if call_types_path.exists():
+        df_types = pd.read_csv(call_types_path)
+        type_map = dict(zip(df_types["meeting_id"].astype(str), df_types["final_label"]))
+    business_taxonomy = build_business_taxonomy(calls, type_map)
+    print(f"  Top categories: {business_taxonomy['top_categories'][:3]}")
+
+    # ------------------------------------------------------------------
     # Charts
     # ------------------------------------------------------------------
     print("\n--- Generating charts ---")
 
     # Topic distribution bar chart
     topic_counts = df_topics[df_topics["topic_name"] != "Noise"]["topic_name"].value_counts()
-    fig, ax = plt.subplots(figsize=(10, 7))
+    fig, ax = create_chart_fig("03_topic_distribution.png")
     ax.barh(topic_counts.index, topic_counts.values, color="steelblue")
     ax.set_xlabel("Number of calls")
     ax.set_title("Topic Distribution")
-    ax.tick_params(axis="y", labelsize=9)
     for i, v in enumerate(topic_counts.values):
-        ax.text(v + 0.3, i, str(v), va="center", fontsize=9)
+        ax.text(v + 0.3, i, str(v), va="center")
     plt.tight_layout()
     save_chart(fig, "03_topic_distribution.png")
     plt.close(fig)
 
     # Clustering comparison chart
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = create_chart_fig("03_clustering_comparison.png")
     methods = []
     scores = []
     if "hdbscan" in results:
@@ -414,6 +625,9 @@ def main():
         ax.text(i, s + 0.01, f"{s:.3f}", ha="center", fontweight="bold")
     save_chart(fig, "03_clustering_comparison.png")
     plt.close(fig)
+
+    # Business taxonomy stacked bar
+    plot_taxonomy_by_call_type(business_taxonomy["by_call_type"], len(calls))
 
     # ------------------------------------------------------------------
     # Save
@@ -455,6 +669,7 @@ def main():
         },
         "topic_by_call_type": topic_by_type,
         "assignments": topic_assignments,
+        "business_taxonomy": business_taxonomy,
     }
     save_json(topics_data, "topics.json")
 

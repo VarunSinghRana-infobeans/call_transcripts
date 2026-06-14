@@ -581,6 +581,48 @@ We chose **Option 3**. The PPTX itself is the deliverable. Screenshots can be ge
 
 ---
 
+## 12. Business Taxonomy: Why We Added It on Top of HDBSCAN
+
+### The Problem
+
+HDBSCAN discovered 5 clusters with a silhouette of ~0.085 and flagged 44 of 100 calls as noise. While this is honest, it is hard to present to leadership:
+
+- "44% of calls are noise" sounds like the model failed.
+- Cluster names like "Incident Response & Reliability" are accurate but overlap with business categories a product team already uses.
+- The reference deck the user shared uses a clean 10-category taxonomy (Billing, Identity, Compliance, Reliability, API, Success, Detection, Product, Churn, Internal Ops).
+
+### Our Solution
+
+Keep HDBSCAN for the technical appendix, but add a **keyword-backed 10-category business taxonomy** for the main narrative.
+
+```
+Call
+  |
+  +---> HDBSCAN cluster (technical evidence, appendix)
+  |
+  +---> Business taxonomy primary/secondary category (deck narrative)
+```
+
+### How It Works
+
+1. Each call gets a score for all 10 categories based on keyword matches in:
+   - `title` (weighted 2x — strongest signal)
+   - `summary` (weighted 1x)
+   - `topics[]` array (weighted 1x)
+2. The highest-scoring category becomes the primary category.
+3. Cross-tabs produce counts like "Compliance & Audit: 42% of external calls."
+
+### Why This Is Defensible
+
+- **Transparent:** The keywords for each category are in the code (`BUSINESS_TAXONOMY`).
+- **Verifiable:** Anyone can read the title/summary and check the assignment.
+- **Familiar:** Categories map directly to Aegis product surfaces (Detect, Comply, Identity).
+- **Honest:** We still report HDBSCAN limitations in the methodology appendix.
+
+### Trade-off
+
+- We introduce a second topic model. This is acceptable because the two models serve different audiences: HDBSCAN for data-science review, taxonomy for executive storytelling.
+
 ## Final Scorecard: What We Kept, What We Cut
 
 ```

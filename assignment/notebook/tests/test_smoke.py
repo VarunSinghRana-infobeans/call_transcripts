@@ -104,7 +104,7 @@ def test_all_scripts_exist():
 def test_ppt_script_reads_json_outputs():
     """PPT script should reference JSON files, not hardcode all stats."""
     ppt_path = Path(__file__).parent.parent / "06_generate_ppt.py"
-    content = ppt_path.read_text()
+    content = ppt_path.read_text(encoding="utf-8")
     # Either reads JSON directly or uses ppt_data module
     assert ("json.load" in content or "json.loads" in content or
             "ppt_data" in content), \

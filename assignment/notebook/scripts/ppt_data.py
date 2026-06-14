@@ -77,9 +77,11 @@ class PresentationData:
 
     # Sentiment
     sentiment: SentimentByType = field(default_factory=SentimentByType)
+    sentiment_interpretation: dict = field(default_factory=dict)
     topic_cross: dict = field(default_factory=dict)
     problem_zones: list[dict] = field(default_factory=list)
     strong_zones: list[dict] = field(default_factory=list)
+    watch_zone: dict = field(default_factory=dict)
 
     # Topics
     topic_method: str = "unknown"
@@ -88,6 +90,7 @@ class PresentationData:
     hdbscan_noise: int = 0
     clusters: dict[str, dict] = field(default_factory=dict)
     topic_by_call_type: dict = field(default_factory=dict)
+    business_taxonomy: dict = field(default_factory=dict)
 
     # Churn
     risk_distribution: RiskDistribution = field(default_factory=RiskDistribution)
@@ -99,9 +102,12 @@ class PresentationData:
     # Features
     feature_keywords: dict[str, int] = field(default_factory=dict)
     feature_samples: dict[str, list[dict]] = field(default_factory=dict)
+    feature_callouts: list[dict] = field(default_factory=list)
 
     # Escalations / Action items
     action_items: dict[str, dict] = field(default_factory=dict)
+    carry_forward_actions: dict[str, dict] = field(default_factory=dict)
+    carry_forward_total: int = 0
     escalation_chains: list[dict] = field(default_factory=list)
 
     # Warnings
@@ -211,9 +217,11 @@ def load_presentation_data(output_dir: Path | None = None) -> PresentationData:
     data.sentiment.support_neg = by_type.get("negative_pct", {}).get("support")
     data.sentiment.external_neg = by_type.get("negative_pct", {}).get("external")
     data.sentiment.internal_neg = by_type.get("negative_pct", {}).get("internal")
+    data.sentiment_interpretation = sentiment.get("interpretation", {})
     data.topic_cross = sentiment.get("topic_cross", {})
     data.problem_zones = sentiment.get("problem_zones", [])
     data.strong_zones = sentiment.get("strong_zones", [])
+    data.watch_zone = sentiment.get("watch_zone", {})
 
     # Topics
     topics = load_json(output_dir / "topics.json")
@@ -228,6 +236,7 @@ def load_presentation_data(output_dir: Path | None = None) -> PresentationData:
         corrected["name"] = correct_topic_name(info.get("name", f"Cluster {cid}"), info.get("keywords", []))
         data.clusters[cid] = corrected
     data.topic_by_call_type = topics.get("topic_by_call_type", {})
+    data.business_taxonomy = topics.get("business_taxonomy", {})
 
     # Churn
     churn = load_json(output_dir / "05_churn_scores.json")
@@ -257,10 +266,13 @@ def load_presentation_data(output_dir: Path | None = None) -> PresentationData:
     features = load_json(output_dir / "05_feature_requests.json")
     data.feature_keywords = features.get("top_keywords", {})
     data.feature_samples = features.get("feature_samples", {})
+    data.feature_callouts = features.get("feature_callouts", [])
 
     # Escalations
     esc = load_json(output_dir / "05_escalations.json")
     data.action_items = esc.get("action_items_by_type", {})
+    data.carry_forward_actions = esc.get("carry_forward_actions", {})
+    data.carry_forward_total = esc.get("carry_forward_total", 0)
     data.escalation_chains = esc.get("chains", [])
 
     data.warnings.extend(validate_ppt_data(data))

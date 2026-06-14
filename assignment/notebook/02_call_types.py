@@ -46,6 +46,7 @@ from utils import (
     extract_meeting_title,
     extract_summary_text,
     llm_classify,
+    create_chart_fig,
     save_chart,
     save_csv,
     save_json,
@@ -207,7 +208,7 @@ def main():
     # ------------------------------------------------------------------
     print("\n--- Generating charts ---")
 
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = create_chart_fig("02_call_types_distribution.png")
     counts = df["final_label"].value_counts()
     colors = {"support": "#ff7f0e", "external": "#2ca02c", "internal": "#1f77b4", "uncategorized": "#d62728"}
     bar_colors = [colors.get(label, "gray") for label in counts.index]
@@ -221,7 +222,7 @@ def main():
     plt.close(fig)
 
     # Confidence distribution
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = create_chart_fig("02_confidence_distribution.png")
     ax.hist(df["final_confidence"], bins=15, edgecolor="black", color="skyblue")
     ax.set_xlabel("Classification Confidence")
     ax.set_ylabel("Number of calls")

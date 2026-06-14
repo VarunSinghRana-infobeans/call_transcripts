@@ -51,6 +51,7 @@ from utils import (
     extract_meeting_title,
     extract_meeting_date,
     extract_summary_text,
+    create_chart_fig,
     save_chart,
     save_csv,
     save_json,
@@ -199,6 +200,46 @@ def build_escalation_chains(calls: list[dict], type_map: dict) -> list[dict]:
 # Main
 # ---------------------------------------------------------------------------
 
+def parse_action_items(call: dict) -> list[dict]:
+    """Extract structured action items from summary.actionItems."""
+    items = []
+    summary = call.get("summary") or {}
+    raw_items = summary.get("actionItems", [])
+    if isinstance(raw_items, str):
+        raw_items = [raw_items]
+    for item in raw_items:
+        if not item or not isinstance(item, str):
+            continue
+        owner = "Unknown"
+        text = item
+        if ":" in item:
+            parts = item.split(":", 1)
+            owner = parts[0].strip()
+            text = parts[1].strip()
+        items.append({
+            "owner": owner,
+            "text": text,
+            "meeting_id": call["meeting_id"],
+            "title": extract_meeting_title(call),
+            "date": extract_meeting_date(call),
+            "call_type": "unknown",
+        })
+    return items
+
+
+def summarize_signals(signals: list[str]) -> str:
+    """Convert signal names into a short human-readable explanation."""
+    mapping = {
+        "negative_sentiment_dominates": "negative tone",
+        "renewal_discussion": "renewal at stake",
+        "competitor_mentioned": "competitor mentioned",
+        "escalation_requested": "escalation requested",
+        "executive_involvement": "executive involvement",
+        "product_dissatisfaction": "product dissatisfaction",
+    }
+    return ", ".join(mapping.get(s, s.replace("_", " ")) for s in signals[:4])
+
+
 def main():
     set_chart_style()
     print("=" * 60)
@@ -304,7 +345,7 @@ def main():
     print("\n--- Generating charts ---")
 
     # Churn risk distribution
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = create_chart_fig("05_churn_risk_distribution.png")
     risk_counts = df_churn["risk_level"].value_counts()
     colors = {"High": "#d62728", "Medium": "#ff7f0e", "Low": "#2ca02c"}
     bar_colors = [colors.get(l, "gray") for l in risk_counts.index]
@@ -318,7 +359,7 @@ def main():
     plt.close(fig)
 
     # Churn score histogram
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = create_chart_fig("05_churn_score_histogram.png")
     ax.hist(df_churn["churn_score"], bins=range(0, df_churn["churn_score"].max()+2), edgecolor="black", color="coral")
     ax.set_xlabel("Churn Risk Score")
     ax.set_ylabel("Number of Calls")
@@ -331,7 +372,7 @@ def main():
 
     # Feature request frequency
     if keyword_counts:
-        fig, ax = plt.subplots(figsize=(10, 6))
+        fig, ax = create_chart_fig("05_feature_requests.png")
         top_kws = list(keyword_counts.items())[:15]
         ax.barh([k[0] for k in top_kws], [k[1] for k in top_kws], color="steelblue")
         ax.set_xlabel("Mentions")
@@ -342,7 +383,7 @@ def main():
     # Escalation chains count
     if chains:
         chain_lengths = [len(c["calls"]) for c in chains]
-        fig, ax = plt.subplots(figsize=(8, 5))
+        fig, ax = create_chart_fig("05_escalation_chain_lengths.png")
         ax.hist(chain_lengths, bins=range(2, max(chain_lengths)+2), edgecolor="black", color="purple")
         ax.set_xlabel("Number of Calls per Account")
         ax.set_ylabel("Number of Accounts")
@@ -360,6 +401,7 @@ def main():
         call = next((c for c in calls if c["meeting_id"] == row["meeting_id"]), None)
         summary_text = extract_summary_text(call)[:300] if call else ""
         signals_list = row["signals"].split(", ") if row["signals"] else []
+        account = extract_account_name(row["title"]) or "Unknown account"
         narrative_parts = []
         if "negative_sentiment_dominates" in signals_list:
             narrative_parts.append("Dominated by negative sentiment.")
@@ -374,16 +416,22 @@ def main():
         if "executive_involvement" in signals_list:
             narrative_parts.append("Executive level involved.")
         narrative = " ".join(narrative_parts) if narrative_parts else summary_text[:150]
+        conclusion = "Immediate AM/CS intervention recommended." if row["churn_score"] >= 9 else "Schedule executive follow-up and monitor closely."
         churn_narratives.append({
             "meeting_id": row["meeting_id"],
             "title": row["title"],
+            "account": account,
+            "call_type": type_map.get(row["meeting_id"], "unknown"),
             "churn_score": int(row["churn_score"]),
             "sentiment_score": float(row["sentiment_score"]),
             "signals": row["signals"],
+            "signals_list": signals_list,
+            "signal_summary": summarize_signals(signals_list),
             "narrative": narrative,
+            "conclusion": conclusion,
         })
 
-    # Feature samples: top 3 sample sentences per keyword
+    # Feature samples: top 3 sample sentences per keyword, with full call context
     feature_samples = {}
     for kw in list(keyword_counts.keys())[:8]:
         samples = []
@@ -392,10 +440,23 @@ def main():
                 samples.append({
                     "sentence": row["feature_request"][:200],
                     "title": row["title"],
+                    "meeting_id": row["meeting_id"],
+                    "date": row["date"],
                 })
             if len(samples) >= 3:
                 break
         feature_samples[kw] = samples
+
+    # Representative feature-request calls (one per top keyword for the PPT cards)
+    feature_callouts = []
+    for kw, count in list(keyword_counts.items())[:5]:
+        sample = next((s for s in feature_samples.get(kw, [])), None)
+        feature_callouts.append({
+            "keyword": kw,
+            "count": count,
+            "sample_title": sample["title"] if sample else "",
+            "sample_sentence": sample["sentence"] if sample else "",
+        })
 
     # Action items per call type (heuristic: count explicit action/follow-up language)
     action_item_keywords = ["action item", "follow up", "follow-up", "next step", "todo", "to do", "will do", "need to"]
@@ -420,8 +481,38 @@ def main():
     for ctype, info in action_counts.items():
         print(f"  {ctype}: {info['action_mentions']} mentions ({info['avg_per_call']} avg per call)")
 
+    # Carry-forward actions: structured list from summary.actionItems
+    carry_forward_actions = []
+    for call in calls:
+        for item in parse_action_items(call):
+            item["call_type"] = type_map.get(call["meeting_id"], "unknown")
+            carry_forward_actions.append(item)
+
+    # Group carry-forward actions by call type
+    carry_forward_by_type = {}
+    for ctype in ["support", "external", "internal"]:
+        actions = [a for a in carry_forward_actions if a["call_type"] == ctype]
+        carry_forward_by_type[ctype] = {
+            "count": len(actions),
+            "top_actions": actions[:5],
+        }
+
+    # Carry-forward actions chart
+    carry_counts = [carry_forward_by_type[c]["count"] for c in ["support", "external", "internal"]]
+    if sum(carry_counts) > 0:
+        fig, ax = create_chart_fig("05_carry_forward_actions.png")
+        bars = ax.bar(["support", "external", "internal"], carry_counts, color=["#1a237e", "#0078d4", "#ff6b35"])
+        ax.set_ylabel("Open Action Items")
+        ax.set_title("Carry-Forward Actions by Call Type")
+        for bar, count in zip(bars, carry_counts):
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2., height + 0.3,
+                    str(int(count)), ha="center", va="bottom", fontweight="bold")
+        save_chart(fig, "05_carry_forward_actions.png")
+        plt.close(fig)
+
     # Action items chart for PPT
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = create_chart_fig("05_action_items_by_type.png")
     ctypes = list(action_counts.keys())
     avgs = [action_counts[c]["avg_per_call"] for c in ctypes]
     totals = [action_counts[c]["action_mentions"] for c in ctypes]
@@ -431,7 +522,7 @@ def main():
     for bar, total in zip(bars, totals):
         height = bar.get_height()
         ax.text(bar.get_x() + bar.get_width()/2., height + 0.05,
-                f"{height:.1f}\n({total} total)", ha="center", va="bottom", fontsize=10)
+                f"{height:.1f}\n({total} total)", ha="center", va="bottom")
     save_chart(fig, "05_action_items_by_type.png")
     plt.close(fig)
 
@@ -453,12 +544,15 @@ def main():
         "total_mentions": len(df_features),
         "top_keywords": keyword_counts,
         "feature_samples": feature_samples,
+        "feature_callouts": feature_callouts,
         "requests": df_features.to_dict("records")[:50],
     }, "05_feature_requests.json")
 
     save_json({
         "total_accounts_with_chains": len(chains),
         "action_items_by_type": action_counts,
+        "carry_forward_actions": carry_forward_by_type,
+        "carry_forward_total": len(carry_forward_actions),
         "chains": [
             {
                 "account": c["account"],

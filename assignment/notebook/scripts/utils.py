@@ -14,9 +14,12 @@ WHY RELATIVE PATHS:
 """
 
 import json
+import math
 import os
 from pathlib import Path
 from typing import Any
+
+import matplotlib.pyplot as plt
 import pandas as pd
 from datetime import datetime
 
@@ -178,12 +181,56 @@ from ai_config import llm_classify, llm_generate
 
 
 # ---------------------------------------------------------------------------
-# Chart Styling
+# Chart layouts for PPT — generate charts at the exact size they will occupy
 # ---------------------------------------------------------------------------
+
+# Target display size for every chart that goes into the deck.
+# Width/height are in inches, matching the boxes used in 06_generate_ppt.py.
+CHART_LAYOUTS = {
+    # 01 explore (only 01_duration_distribution.png is used in PPT appendix)
+    "01_duration_distribution.png": (4.4, 1.9),
+    "01_sentiment_distribution.png": (6.0, 4.0),
+    "01_overall_sentiment.png": (6.0, 4.0),
+    "01_call_volume_over_time.png": (8.0, 4.5),
+
+    # 02 call types
+    "02_call_types_distribution.png": (7.0, 2.5),
+    "02_confidence_distribution.png": (6.0, 4.0),
+
+    # 03 topic modeling
+    "03_topic_distribution.png": (5.4, 3.6),
+    "03_clustering_comparison.png": (4.4, 1.9),
+
+    # 04 sentiment
+    "04_sentiment_trend_by_type.png": (5.4, 3.5),
+    "04_negative_sentiment_trend.png": (4.4, 1.9),
+    "04_sentiment_boxplot.png": (4.0, 2.5),
+    "04_sentiment_stacked_by_type.png": (7.5, 2.5),  # wider to fit right-side legend
+
+    # 05 bonus insights
+    "05_churn_risk_distribution.png": (5.4, 4.0),
+    "05_churn_score_histogram.png": (4.4, 1.9),
+    "05_feature_requests.png": (5.4, 3.0),
+    "05_escalation_chain_lengths.png": (5.4, 3.0),
+    "05_action_items_by_type.png": (4.8, 2.9),
+}
+
+# Reference area used to scale font sizes for smaller charts.
+# A chart with this area gets the default base size; smaller charts get a bump.
+_REF_AREA = 13.375  # in², roughly the average target area of the PPT charts
+
+
+def _font_size_for_area(width: float, height: float) -> int:
+    """Choose a readable base font size for a chart of the given target area."""
+    area = width * height
+    if area <= 0:
+        return 11
+    scaled = 11 * math.sqrt(_REF_AREA / area)
+    return int(round(max(11, min(14, scaled))))
+
 
 def set_chart_style(base_size: int = 11):
     """Apply a presentation-friendly matplotlib style with larger text."""
-    import matplotlib.pyplot as plt
     plt.rcParams.update({
         "font.size": base_size,
         "axes.titlesize": base_size + 2,
@@ -197,14 +244,32 @@ def set_chart_style(base_size: int = 11):
     })
 
 
+def create_chart_fig(filename: str, fallback_size: tuple[float, float] | None = None):
+    """
+    Create a matplotlib figure sized for its target PPT slot.
+
+    Uses the layout map in CHART_LAYOUTS; if the filename is unknown, falls
+    back to `fallback_size` or (6, 4). Font sizes are scaled so smaller charts
+    stay readable on the slide.
+    """
+    width, height = CHART_LAYOUTS.get(filename, fallback_size or (6.0, 4.0))
+    base_size = _font_size_for_area(width, height)
+    set_chart_style(base_size=base_size)
+    fig, ax = plt.subplots(figsize=(width, height))
+    return fig, ax
+
+
 # ---------------------------------------------------------------------------
 # Chart Saving
 # ---------------------------------------------------------------------------
 
+CHART_DPI = 300
+
+
 def save_chart(fig, filename: str) -> Path:
-    """Save matplotlib figure to charts directory."""
+    """Save matplotlib figure to charts directory at high DPI for crisp slides."""
     path = CHARTS_DIR / filename
-    fig.savefig(path, dpi=150, bbox_inches="tight")
+    fig.savefig(path, dpi=CHART_DPI, bbox_inches="tight")
     print(f"Chart saved: {path}")
     return path
 
