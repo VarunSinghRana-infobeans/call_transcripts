@@ -651,14 +651,16 @@ def main():
     top_counts = sorted(
         ((cat, int(cnt)) for cat, cnt in primary_counts.items() if cat != "Other"),
         key=lambda x: x[1],
-    )
+        reverse=True,
+    )[:5]
     if top_counts:
         fig, ax = create_chart_fig("03_top_business_categories.png")
         cats, counts = zip(*top_counts)
         colors = [color_map.get(c, "#7f7f7f") for c in cats]
+        labels = [c[:22] + "…" if len(c) > 22 else c for c in cats]
         ax.barh(range(len(cats)), counts, color=colors)
         ax.set_yticks(range(len(cats)))
-        ax.set_yticklabels(cats)
+        ax.set_yticklabels(labels, fontsize=9)
         ax.invert_yaxis()
         ax.set_xlabel("Number of Calls")
         ax.set_title("Top Business Categories")

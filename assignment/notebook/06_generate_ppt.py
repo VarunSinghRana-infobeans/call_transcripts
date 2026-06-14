@@ -22,7 +22,13 @@ from pptx.enum.shapes import MSO_SHAPE
 from pptx.enum.text import MSO_AUTO_SIZE, PP_ALIGN
 from pptx.util import Inches, Pt
 
-from ppt_data import PresentationData, fmt_num, load_presentation_data
+import json
+
+import matplotlib.pyplot as plt
+import pandas as pd
+from matplotlib.gridspec import GridSpec
+
+from ppt_data import PresentationData, fmt_num, load_csv, load_presentation_data
 from utils import CHARTS_DIR, OUTPUT_DIR
 
 
@@ -78,6 +84,9 @@ C_TEXT = RGBColor(0x33, 0x33, 0x33)         # Dark gray
 C_LIGHT = RGBColor(0x88, 0x88, 0x88)        # Light gray
 C_WHITE = RGBColor(0xff, 0xff, 0xff)
 C_BG = RGBColor(0xf5, 0xf6, 0xf8)           # Card background
+
+# Consistent call-type colours used across charts
+CTYPE_COLORS = {"support": "#ff7f0e", "external": "#2ca02c", "internal": "#1f77b4"}
 
 C_RED = RGBColor(0xc0, 0x39, 0x2b)
 C_AMBER = RGBColor(0xe6, 0x8a, 0x00)
@@ -578,8 +587,136 @@ def add_pipeline_slide(prs):
     return slide
 
 
+def generate_dataset_overview_grid(data: PresentationData) -> Path:
+    """Create a single, tightly-laid-out 2×2 chart grid for the dataset slide."""
+    out_path = CHARTS_DIR / "00_dataset_overview_grid.png"
+
+    # Compact style: the grid is small, so keep fonts tiny and trim decorations.
+    plt.rcParams.update({
+        "font.size": 8,
+        "axes.titlesize": 9,
+        "axes.labelsize": 8,
+        "xtick.labelsize": 7,
+        "ytick.labelsize": 7,
+        "legend.fontsize": 7,
+        "axes.spines.top": False,
+        "axes.spines.right": False,
+    })
+
+    fig = plt.figure(figsize=(9.0, 2.55))
+    gs = GridSpec(2, 2, figure=fig, wspace=0.28, hspace=0.40,
+                  left=0.06, right=0.98, top=0.92, bottom=0.12)
+
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax2 = fig.add_subplot(gs[0, 1])
+    ax3 = fig.add_subplot(gs[1, 0])
+    gs_br = gs[1, 1].subgridspec(1, 2, wspace=0.22)
+    ax4 = fig.add_subplot(gs_br[0, 0])
+    ax5 = fig.add_subplot(gs_br[0, 1])
+
+    ctypes = ["support", "external", "internal"]
+    colors = [CTYPE_COLORS[c] for c in ctypes]
+
+    # Top-left: call type distribution
+    counts = [data.support_count, data.external_count, data.internal_count]
+    bars1 = ax1.bar(ctypes, counts, color=colors)
+    ax1.set_title("Call Type Distribution", fontweight="bold")
+    ax1.set_ylabel("Calls")
+    for bar, v in zip(bars1, counts):
+        ax1.text(bar.get_x() + bar.get_width() / 2.0, bar.get_height() + 0.5,
+                 str(v), ha="center", va="bottom", fontsize=8, fontweight="bold")
+    ax1.set_ylim(0, max(counts) * 1.15 if counts else 1)
+
+    # Top-right: sentiment score distribution by call type
+    df_sent = load_csv(data.output_dir / "04_sentiment_details.csv")
+    if df_sent is not None and {"call_type", "sentiment_score"}.issubset(df_sent.columns):
+        parts = ax2.violinplot(
+            [df_sent[df_sent["call_type"] == c]["sentiment_score"].dropna().values for c in ctypes],
+            positions=[1, 2, 3], showmeans=True, showmedians=True,
+        )
+        for pc, color in zip(parts["bodies"], colors):
+            pc.set_facecolor(color)
+            pc.set_alpha(0.6)
+            pc.set_edgecolor(color)
+        ax2.set_xticks([1, 2, 3])
+        ax2.set_xticklabels(ctypes)
+        ax2.set_title("Sentiment Distribution by Type", fontweight="bold")
+        ax2.set_ylabel("Score")
+        ax2.set_ylim(0, 5)
+        ax2.axhline(y=3, color="gray", linestyle="--", linewidth=0.8, alpha=0.5)
+    else:
+        ax2.text(0.5, 0.5, "Sentiment data unavailable", transform=ax2.transAxes,
+                 ha="center", va="center", fontsize=8)
+
+    # Bottom-left: top business categories
+    top_cats = sorted(
+        data.business_taxonomy.get("top_categories", []),
+        key=lambda x: x.get("count", 0),
+        reverse=True,
+    )[:5]
+    if top_cats:
+        cat_names = [c["category"] for c in top_cats]
+        cat_counts = [c["count"] for c in top_cats]
+        cat_labels = [name[:22] + "…" if len(name) > 22 else name for name in cat_names]
+        y_pos = range(len(cat_labels))
+        bars3 = ax3.barh(list(y_pos), cat_counts, color="#1f77b4")
+        ax3.set_yticks(list(y_pos))
+        ax3.set_yticklabels(cat_labels)
+        ax3.invert_yaxis()
+        ax3.set_title("Top Business Categories", fontweight="bold")
+        ax3.set_xlabel("Calls")
+        for i, v in enumerate(cat_counts):
+            ax3.text(v + 0.3, i, str(v), va="center", fontsize=7)
+        ax3.set_xlim(0, max(cat_counts) * 1.15)
+    else:
+        ax3.text(0.5, 0.5, "No category data", transform=ax3.transAxes,
+                 ha="center", va="center", fontsize=8)
+
+    # Bottom-right: average action items and duration, side-by-side
+    action_items = data.action_items or {}
+    avg_items = [action_items.get(c, {}).get("avg_per_call", 0) for c in ctypes]
+    bars4 = ax4.bar(ctypes, avg_items, color=colors)
+    ax4.set_title("Avg Action Items", fontweight="bold")
+    ax4.set_ylabel("Per call")
+    for bar, v in zip(bars4, avg_items):
+        ax4.text(bar.get_x() + bar.get_width() / 2.0, bar.get_height() + 0.05,
+                 f"{v:.1f}", ha="center", va="bottom", fontsize=7)
+    ax4.set_ylim(0, max(avg_items) * 1.2 if avg_items else 1)
+
+    df_summary = load_csv(data.output_dir / "01_calls_summary.csv")
+    df_types = load_csv(data.output_dir / "02_call_types.csv")
+    avg_dur = []
+    if (df_summary is not None and df_types is not None and
+        {"meeting_id", "duration_minutes"}.issubset(df_summary.columns) and
+        {"meeting_id", "final_label"}.issubset(df_types.columns)):
+        merged = pd.merge(
+            df_summary[["meeting_id", "duration_minutes"]],
+            df_types[["meeting_id", "final_label"]],
+            on="meeting_id",
+            how="left",
+        )
+        for c in ctypes:
+            vals = merged[merged["final_label"] == c]["duration_minutes"].dropna()
+            avg_dur.append(round(float(vals.mean()), 1) if len(vals) > 0 else 0.0)
+    else:
+        avg_dur = [0.0, 0.0, 0.0]
+
+    bars5 = ax5.bar(ctypes, avg_dur, color=colors)
+    ax5.set_title("Avg Duration", fontweight="bold")
+    ax5.set_ylabel("Minutes")
+    for bar, v in zip(bars5, avg_dur):
+        ax5.text(bar.get_x() + bar.get_width() / 2.0, bar.get_height() + 0.3,
+                 f"{v:.1f}", ha="center", va="bottom", fontsize=7)
+    ax5.set_ylim(0, max(avg_dur) * 1.15 if avg_dur else 1)
+
+    fig.savefig(out_path, dpi=300, bbox_inches="tight", pad_inches=0.03)
+    plt.close(fig)
+    print(f"Dataset overview grid saved: {out_path}")
+    return out_path
+
+
 def add_dataset_slide(prs, data: PresentationData):
-    """Rich dataset overview: KPIs + 2x2 chart grid."""
+    """Rich dataset overview: KPIs + single composite 2×2 chart grid."""
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     add_slide_title(slide, "Dataset Overview",
                     f"{data.total_calls} calls from Aegis dataset · {data.date_min} to {data.date_max}")
@@ -591,7 +728,6 @@ def add_dataset_slide(prs, data: PresentationData):
         (fmt_num(data.avg_sentiment), f"Avg Sentiment ({sentiment_label})", sentiment_color(data.avg_sentiment or 3)),
         (_fmt_date_range(data.date_min, data.date_max), "Date Range", C_ACCENT, FONT_SUBTITLE),
     ]
-    # 4 tiles must fit in 9" content width with 0.12" gaps
     box_w = Inches(2.16)
     box_h = Inches(0.95)
     add_kpi_row(slide, kpis, CONTENT_Y, box_w, box_h)
@@ -608,22 +744,15 @@ def add_dataset_slide(prs, data: PresentationData):
     add_text(slide, MARGIN, Inches(2.35), CONTENT_W, Inches(0.25),
              breakdown, FONT_BODY, bold=True, color=C_PRIMARY, align=PP_ALIGN.CENTER)
 
-    # 2x2 chart grid to remove whitespace and give a complete snapshot
-    chart_w = Inches(4.75)
-    chart_h = Inches(1.45)
-    gap = Inches(0.12)
+    # Single composite grid — no gaps, no stretched images, no flying lines.
     grid_y = Inches(2.62)
-    left_x = MARGIN
-    right_x = MARGIN + chart_w + gap
-
-    add_chart_if_exists(slide, "02_call_types_distribution.png", left_x, grid_y, chart_w, chart_h)
-    add_chart_if_exists(slide, "04_sentiment_score_distribution.png", right_x, grid_y, chart_w, chart_h)
-    add_chart_if_exists(slide, "03_top_business_categories.png", left_x, grid_y + chart_h + gap, chart_w, chart_h)
-    add_chart_if_exists(slide, "05_action_items_duration.png", right_x, grid_y + chart_h + gap, chart_w, chart_h)
+    grid_h = Inches(2.55)
+    generate_dataset_overview_grid(data)
+    add_chart_if_exists(slide, "00_dataset_overview_grid.png", MARGIN, grid_y, CONTENT_W, grid_h)
 
     # Conclusion footer
-    card_h = Inches(0.55)
-    footer_y = grid_y + 2 * chart_h + 2 * gap + Inches(0.04)
+    footer_y = grid_y + grid_h + Inches(0.05)
+    card_h = Inches(0.35)
     if data.total_calls > 0:
         insight_text = (
             f"Conclusion: Support dominates volume ({round(100*data.support_count/data.total_calls)}%). "
@@ -632,7 +761,7 @@ def add_dataset_slide(prs, data: PresentationData):
     else:
         insight_text = "Conclusion: No call type data available."
     add_card(slide, MARGIN, footer_y, CONTENT_W, card_h, line=C_SECONDARY)
-    add_text(slide, MARGIN + Inches(0.12), footer_y + Inches(0.08), CONTENT_W - Inches(0.24), Inches(0.40),
+    add_text(slide, MARGIN + Inches(0.12), footer_y + Inches(0.05), CONTENT_W - Inches(0.24), Inches(0.26),
              fit_text(insight_text, CONTENT_W - Inches(0.24), FONT_TINY, 2), FONT_TINY, color=C_TEXT)
 
     check(slide, "Dataset")
@@ -841,7 +970,7 @@ def add_strong_zones_slide(prs, data: PresentationData):
         "Sentiment scale: 1-2 = very negative/negative, 3 = neutral/mixed, "
         "4 = positive (relationship/product strength), 5 = very positive (advocacy moment)."
     )
-    add_text(slide, MARGIN, Inches(5.40), CONTENT_W, Inches(0.30),
+    add_text(slide, MARGIN, Inches(5.15), CONTENT_W, Inches(0.25),
              fit_text(scale_footer, CONTENT_W, FONT_MICRO, 2), FONT_MICRO, color=C_LIGHT, align=PP_ALIGN.CENTER)
 
     check(slide, "Strong Zones")
@@ -927,17 +1056,18 @@ def add_renewal_risk_slide(prs, data: PresentationData):
         (len(risky_accounts), "Risky Accounts", C_AMBER),
     ]
     box_w = Inches(2.16)
-    box_h = Inches(0.85)
+    box_h = Inches(0.70)
     add_kpi_row(slide, kpis, CONTENT_Y, box_w, box_h)
 
     # At-risk calls list
-    add_text(slide, MARGIN, CONTENT_Y + Inches(1.05), CONTENT_W, Inches(0.30),
+    add_text(slide, MARGIN, CONTENT_Y + Inches(0.90), CONTENT_W, Inches(0.25),
              "At-risk renewal calls (negative sentiment, competitor mentions, or escalations):",
              FONT_BODY, bold=True, color=C_RED)
 
-    calls = [c for c in renewal.get("calls", []) if c.get("is_risky")][:5]
-    card_h = Inches(0.76)
-    y = CONTENT_Y + Inches(1.38)
+    calls = [c for c in renewal.get("calls", []) if c.get("is_risky")][:3]
+    card_h = Inches(0.74)
+    gap = Inches(0.06)
+    y = CONTENT_Y + Inches(1.22)
     flag_label = {
         "negative_sentiment_dominates": "negative tone",
         "competitor_mentioned": "competitor",
@@ -952,26 +1082,26 @@ def add_renewal_risk_slide(prs, data: PresentationData):
         account = call.get("account", "Unknown account")
         left_info = f"Account: {account}  |  {call.get('call_type', 'unknown').title()} call"
         right_info = f"Sentiment: {call.get('sentiment_score', 0)}/5  |  Score: {call.get('churn_score', 0)}"
-        add_text(slide, MARGIN + Inches(0.10), y + Inches(0.34), Inches(4.6), Inches(0.20),
+        add_text(slide, MARGIN + Inches(0.10), y + Inches(0.34), Inches(4.5), Inches(0.20),
                  left_info, FONT_TINY, color=C_LIGHT)
-        add_text(slide, MARGIN + Inches(5.0), y + Inches(0.34), Inches(4.6), Inches(0.20),
+        add_text(slide, MARGIN + Inches(5.0), y + Inches(0.34), Inches(4.5), Inches(0.20),
                  right_info, FONT_TINY, color=C_LIGHT, align=PP_ALIGN.RIGHT)
         flags = "  |  ".join(flag_label.get(s, s.replace("_", " ")) for s in call.get("risk_flags", [])[:3])
         add_text(slide, MARGIN + Inches(0.10), y + Inches(0.56), CONTENT_W - Inches(0.24), Inches(0.18),
                  fit_text(f"Risk flags: {flags}", CONTENT_W - Inches(0.24), FONT_MICRO, 1), FONT_MICRO, color=C_RED)
-        y += card_h + Inches(0.06)
+        y += card_h + gap
 
     # Bottom insight
     if total > 0:
         insight = (
             f"Conclusion: {risky} of {total} renewal calls are at risk ({round(100*risky/total)}%). "
-            f"Renewal discussion alone is neutral; risk comes from negative sentiment, competitor mentions, or escalations."
+            f"Risk is driven by negative sentiment, competitor mentions, or escalations, not the renewal topic itself."
         )
     else:
         insight = "Conclusion: No renewal calls detected."
-    footer_y = y + Inches(0.08)
-    add_card(slide, MARGIN, footer_y, CONTENT_W, Inches(0.50), line=C_SECONDARY)
-    add_text(slide, MARGIN + Inches(0.12), footer_y + Inches(0.07), CONTENT_W - Inches(0.24), Inches(0.36),
+    footer_y = y + Inches(0.06)
+    add_card(slide, MARGIN, footer_y, CONTENT_W, Inches(0.40), line=C_SECONDARY)
+    add_text(slide, MARGIN + Inches(0.12), footer_y + Inches(0.06), CONTENT_W - Inches(0.24), Inches(0.28),
              fit_text(insight, CONTENT_W - Inches(0.24), FONT_TINY, 2), FONT_TINY, color=C_TEXT)
 
     check(slide, "Renewal Risk")

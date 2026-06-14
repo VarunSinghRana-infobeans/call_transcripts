@@ -194,20 +194,20 @@ CHART_LAYOUTS = {
     "01_call_volume_over_time.png": (8.0, 4.5),
 
     # 02 call types
-    "02_call_types_distribution.png": (4.7, 1.4),
+    "02_call_types_distribution.png": (5.4, 3.0),
     "02_confidence_distribution.png": (6.0, 4.0),
 
     # 03 topic modeling
     "03_topic_distribution.png": (5.4, 3.6),
     "03_topic_distribution_by_type.png": (5.4, 3.8),
     "03_clustering_comparison.png": (4.4, 1.9),
-    "03_top_business_categories.png": (4.7, 1.4),
+    "03_top_business_categories.png": (5.4, 3.0),
 
     # 04 sentiment
     "04_sentiment_trend_by_type.png": (5.4, 3.5),
     "04_negative_sentiment_trend.png": (4.4, 1.9),
     "04_sentiment_boxplot.png": (4.0, 2.5),
-    "04_sentiment_score_distribution.png": (4.7, 1.4),
+    "04_sentiment_score_distribution.png": (6.0, 3.5),
     "04_sentiment_stacked_by_type.png": (7.5, 2.5),  # wider to fit right-side legend
     "04_sentiment_heatmap_by_taxonomy.png": (8.5, 3.2),
 
@@ -217,7 +217,7 @@ CHART_LAYOUTS = {
     "05_feature_requests.png": (5.4, 4.2),
     "05_escalation_chain_lengths.png": (5.4, 3.0),
     "05_action_items_by_type.png": (4.8, 2.9),
-    "05_action_items_duration.png": (4.7, 1.4),
+    "05_action_items_duration.png": (6.0, 3.0),
 }
 
 # Reference area used to scale font sizes for smaller charts.

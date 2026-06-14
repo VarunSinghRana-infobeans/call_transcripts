@@ -48,6 +48,7 @@ import re
 from collections import Counter, defaultdict
 
 from utils import (
+    CHART_LAYOUTS,
     load_all_calls,
     extract_meeting_title,
     extract_meeting_date,
@@ -844,26 +845,31 @@ def main():
         durations = [d for d in durations if d > 0]
         duration_by_type[ctype] = round(sum(durations) / len(durations), 1) if durations else 0.0
 
-    fig, ax = create_chart_fig("05_action_items_duration.png")
-    x = range(len(ctypes))
-    bars = ax.bar(x, avgs, color="#1a237e", label="Avg action items")
-    ax.set_ylabel("Avg Action Items per Call", color="#1a237e")
-    ax.tick_params(axis="y", labelcolor="#1a237e")
-    ax.set_xticks(x)
-    ax.set_xticklabels(ctypes)
-    for bar, val in zip(bars, avgs):
-        ax.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.05,
-                f"{val:.1f}", ha="center", va="bottom", fontsize=8, color="#1a237e")
+    # Side-by-side bars: clearer than a dual-axis line that implies a trend across categories.
+    ctype_colors = {"support": "#ff7f0e", "external": "#2ca02c", "internal": "#1f77b4"}
+    width, height = CHART_LAYOUTS["05_action_items_duration.png"]
+    set_chart_style(base_size=10)
+    fig, (ax_left, ax_right) = plt.subplots(1, 2, figsize=(width, height))
+    colors = [ctype_colors[c] for c in ctypes]
 
-    ax2 = ax.twinx()
-    line = ax2.plot(x, [duration_by_type[c] for c in ctypes], color="#ff6b35", marker="o", linewidth=2, label="Avg duration (min)")
-    ax2.set_ylabel("Avg Duration (min)", color="#ff6b35")
-    ax2.tick_params(axis="y", labelcolor="#ff6b35")
-    ax.set_title("Action Items & Call Duration by Type")
-    # Combined legend
-    lines1, labels1 = ax.get_legend_handles_labels()
-    lines2, labels2 = ax2.get_legend_handles_labels()
-    ax.legend(lines1 + lines2, labels1 + labels2, loc="upper right")
+    bars_left = ax_left.bar(ctypes, avgs, color=colors)
+    ax_left.set_title("Avg Action Items per Call", fontweight="bold")
+    ax_left.set_ylabel("Items")
+    for bar, val in zip(bars_left, avgs):
+        ax_left.text(bar.get_x() + bar.get_width() / 2.0, bar.get_height() + 0.05,
+                     f"{val:.1f}", ha="center", va="bottom", fontsize=8)
+    ax_left.set_ylim(0, max(avgs) * 1.2 if avgs else 1)
+
+    bars_right = ax_right.bar(ctypes, [duration_by_type[c] for c in ctypes], color=colors)
+    ax_right.set_title("Avg Call Duration", fontweight="bold")
+    ax_right.set_ylabel("Minutes")
+    for bar, val in zip(bars_right, [duration_by_type[c] for c in ctypes]):
+        ax_right.text(bar.get_x() + bar.get_width() / 2.0, bar.get_height() + 0.3,
+                      f"{val:.1f}", ha="center", va="bottom", fontsize=8)
+    ax_right.set_ylim(0, max(duration_by_type.values()) * 1.15 if duration_by_type else 1)
+
+    fig.suptitle("Action Items & Call Duration by Type", fontsize=11, fontweight="bold")
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
     save_chart(fig, "05_action_items_duration.png")
     plt.close(fig)
 
