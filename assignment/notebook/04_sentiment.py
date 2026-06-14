@@ -281,16 +281,65 @@ def main():
         # Build a lookup of example titles per zone for richer "why" text
         title_lookup = dict(zip(df["meeting_id"], df["title"]))
 
-        def zone_why(zone_rows: pd.DataFrame, direction: str) -> str:
+        # Topic-level context so cards do not all read identically
+        ZONE_INSIGHTS = {
+            "Platform Reliability": {
+                "low": "Incident and outage calls directly impact customers. SLA pressure and repeated downtime erode trust.",
+                "high": "Stable reliability conversations (post-fix reviews) show customers respond well to transparency.",
+            },
+            "Threat Detection": {
+                "low": "Alert tuning gaps and false positives create security anxiety; customers question coverage.",
+                "high": "Detection reviews that resolve tuning issues are received positively by security teams.",
+            },
+            "Billing & Contracts": {
+                "low": "Seat overages, invoice disputes and renewal terms generate pushback and pricing friction.",
+                "high": "Clean renewal and expansion conversations reflect strong value communication.",
+            },
+            "Compliance & Audit": {
+                "low": "Audit evidence gaps and auditor tooling mismatches slow down compliance workflows.",
+                "high": "Compliance prep and certification calls score well; customers value the audit support.",
+            },
+            "Identity & Access": {
+                "low": "SSO, MFA and LDAP failures block users and create urgent, high-friction support cases.",
+                "high": "Successful identity rollouts and provisioning reviews land as product strengths.",
+            },
+            "Churn & Risk": {
+                "low": "Escalations and competitor evaluations signal renewal conversations under pressure.",
+                "high": "Recovery check-ins after issues can rebuild confidence when handled proactively.",
+            },
+            "Customer Success": {
+                "low": "Onboarding delays or adoption gaps can turn success calls negative quickly.",
+                "high": "Onboarding kickoffs and QBRs are clear relationship strengths with no escalations.",
+            },
+            "Integrations & API": {
+                "low": "Connector timeouts, rate limits and sync failures drive integration frustration.",
+                "high": "API and webhook rollouts that work as advertised reinforce platform value.",
+            },
+            "Product & Roadmap": {
+                "low": "Roadmap misalignment or missing features can create disappointment in product conversations.",
+                "high": "Roadmap alignment calls where features land well score positively with customers.",
+            },
+            "Internal Operations": {
+                "low": "Internal planning calls rarely score low unless incidents are being escalated.",
+                "high": "Sprint retros and postmortems run constructive, neutral-to-positive tone.",
+            },
+        }
+
+        def zone_why(zone_rows: pd.DataFrame, direction: str, topic: str) -> str:
             if zone_rows.empty:
-                return f"{direction} sentiment zone."
-            # Pick representative low/high calls
-            rep = zone_rows.sort_values("sentiment_score", ascending=(direction == "lowest")).head(3)
+                return f"{direction.capitalize()} sentiment zone."
+            rep = zone_rows.sort_values("sentiment_score", ascending=(direction == "low")).head(3)
             titles = [title_lookup.get(mid, "") for mid in rep["meeting_id"].tolist()]
             titles = [t for t in titles if t]
+            insight = ZONE_INSIGHTS.get(topic, {}).get(direction, "")
+            parts = []
+            if insight:
+                parts.append(insight)
             if titles:
-                return f"{direction.capitalize()} sentiment zone. Example calls: {', '.join(t[:55] for t in titles[:2])}."
-            return f"{direction.capitalize()} sentiment zone ({len(zone_rows)} calls)."
+                parts.append(f"Examples: {', '.join(t[:60] for t in titles[:2])}.")
+            if not parts:
+                return f"{direction.capitalize()} sentiment zone ({len(zone_rows)} calls)."
+            return " ".join(parts)
 
         for ctype in ["support", "external", "internal"]:
             ctype_rows = cross[cross["call_type"] == ctype]
@@ -316,7 +365,7 @@ def main():
                     "sentiment": float(worst["sentiment_score"]),
                     "call_count": int(worst["call_count"]),
                     "negative_pct": float(worst["negative_pct"]),
-                    "why": zone_why(worst_calls, "lowest"),
+                    "why": zone_why(worst_calls, "low", worst["topic_name"]),
                     "label": interpret_score(float(worst["sentiment_score"])),
                 })
                 # Strong zone: highest sentiment
@@ -332,12 +381,58 @@ def main():
                     "sentiment": float(best["sentiment_score"]),
                     "call_count": int(best["call_count"]),
                     "negative_pct": float(best["negative_pct"]),
-                    "why": zone_why(best_calls, "highest"),
+                    "why": zone_why(best_calls, "high", best["topic_name"]),
                     "label": interpret_score(float(best["sentiment_score"])),
                 })
                 print(f"  {ctype}: worst={worst['topic_name']} ({worst['sentiment_score']}), best={best['topic_name']} ({best['sentiment_score']})")
     else:
         print("  topics.json not found. Skipping cross-analysis.")
+
+    # ------------------------------------------------------------------
+    # Category-level sentiment (enriches the topic slide)
+    # ------------------------------------------------------------------
+    category_sentiment = {}
+    if topics_path.exists() and biz_assignments:
+        df_assign = pd.DataFrame(biz_assignments)[["meeting_id", "primary"]]
+        df_assign["meeting_id"] = df_assign["meeting_id"].astype(str)
+        df_cat = df_typed.merge(df_assign, on="meeting_id", how="left")
+        df_cat = df_cat[df_cat["primary"].notna() & (df_cat["primary"] != "Other")]
+        cat_overall = df_cat.groupby("primary").agg({
+            "sentiment_score": "mean",
+            "negative_pct": "mean",
+            "meeting_id": "count",
+        }).reset_index()
+        cat_overall.columns = ["category", "avg_sentiment", "negative_pct", "call_count"]
+        for _, row in cat_overall.iterrows():
+            cs = {
+                "avg_sentiment": round(float(row["avg_sentiment"]), 2),
+                "negative_pct": round(float(row["negative_pct"]), 1),
+                "call_count": int(row["call_count"]),
+                "by_call_type": {},
+            }
+            for ctype in ["support", "external", "internal"]:
+                sub = df_cat[(df_cat["primary"] == row["category"]) & (df_cat["call_type"] == ctype)]
+                if len(sub):
+                    cs["by_call_type"][ctype] = {
+                        "avg_sentiment": round(float(sub["sentiment_score"].mean()), 2),
+                        "negative_pct": round(float(sub["negative_pct"].mean()), 1),
+                        "call_count": int(len(sub)),
+                    }
+            category_sentiment[row["category"]] = cs
+
+        # Write category sentiment back into topics.json so the topic slide can use it
+        try:
+            topics_data = json.loads(topics_path.read_text(encoding="utf-8"))
+            biz = topics_data.get("business_taxonomy", {})
+            for cat_info in biz.get("top_categories", []):
+                cat = cat_info["category"]
+                if cat in category_sentiment:
+                    cat_info["avg_sentiment"] = category_sentiment[cat]["avg_sentiment"]
+                    cat_info["negative_pct"] = category_sentiment[cat]["negative_pct"]
+                    cat_info["by_call_type"] = category_sentiment[cat]["by_call_type"]
+            topics_path.write_text(json.dumps(topics_data, indent=2, default=str), encoding="utf-8")
+        except Exception as e:
+            print(f"  Could not update topics.json with category sentiment: {e}")
 
     # Overall problem/strong zones sorted by sentiment
     problem_zones_sorted = sorted(problem_zones, key=lambda x: x["sentiment"])[:3]
@@ -400,6 +495,7 @@ def main():
         "by_type": by_type.to_dict(),
         "interpretation": sentiment_interpretation,
         "topic_cross": topic_cross,
+        "category_sentiment": category_sentiment,
         "problem_zones": problem_zones_sorted,
         "strong_zones": strong_zones_sorted,
         "watch_zone": watch_zone,

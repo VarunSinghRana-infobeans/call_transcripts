@@ -394,12 +394,27 @@ def build_business_taxonomy(calls: list[dict], type_map: dict) -> dict:
     }
 
 
+# Distinct, presentation-safe categorical colours (no near-white segments)
+CATEGORY_PALETTE = [
+    "#1f77b4",  # Billing & Contracts
+    "#ff7f0e",  # Identity & Access
+    "#2ca02c",  # Compliance & Audit
+    "#d62728",  # Platform Reliability
+    "#9467bd",  # Integrations & API
+    "#8c564b",  # Customer Success
+    "#e377c2",  # Threat Detection
+    "#7f7f7f",  # Product & Roadmap
+    "#bcbd22",  # Churn & Risk
+    "#17becf",  # Internal Operations
+    "#4c4c4c",  # Other
+]
+
+
 def plot_taxonomy_by_call_type(by_call_type: dict, total_calls: int):
     """Generate a stacked horizontal bar chart of category counts by call type."""
     categories = list(BUSINESS_TAXONOMY.keys()) + ["Other"]
     type_order = ["support", "external", "internal"]
-    colors = plt.cm.tab20c(np.linspace(0, 1, len(categories)))
-    color_map = dict(zip(categories, colors))
+    color_map = dict(zip(categories, CATEGORY_PALETTE))
 
     fig, ax = create_chart_fig("03_topic_distribution_by_type.png")
     bottoms = {cat: 0 for cat in categories}
@@ -413,7 +428,7 @@ def plot_taxonomy_by_call_type(by_call_type: dict, total_calls: int):
 
     ax.set_xlabel("Number of Calls")
     ax.set_title("Topic Category Distribution by Call Type")
-    ax.legend(title="Category", bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=8)
+    ax.legend(title="Category", bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=7)
     plt.tight_layout()
     save_chart(fig, "03_topic_distribution_by_type.png")
     plt.close(fig)

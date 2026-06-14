@@ -44,6 +44,7 @@ sys.path.insert(0, str(Path(__file__).parent / "scripts"))
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import re
 from collections import Counter, defaultdict
 
 from utils import (
@@ -100,38 +101,110 @@ def risk_level(score: int) -> str:
 # Feature Request Extraction
 # ---------------------------------------------------------------------------
 
-FEATURE_KEYWORDS = [
-    # Specific feature names (high signal)
-    "granular restore", "backup", "webhook", "integration",
-    "dashboard", "notification", "report", "export",
-    "sso", "mfa", "ldap", "saml", "audit log", "role-based",
-    "mobile app", "cli", "automation", "workflow",
-    "api access", "custom fields", "data retention", "bulk upload",
-    # Request phrases (must be specific, not conversational filler)
+# Specific product capabilities that appear in actual requests.
+SPECIFIC_FEATURE_KEYWORDS = [
+    "report", "backup", "integration", "dashboard", "notification",
+    "export", "sso", "mfa", "ldap", "saml", "audit log", "workflow",
+    "cli", "api access", "webhook", "automation", "data retention",
+    "custom fields", "bulk upload", "role-based", "mobile app",
+    "granular restore",
+]
+
+# Generic request phrases — useful for detecting asks, but too vague for a chart label.
+REQUEST_PHRASES = [
     "feature request", "would like to see", "need the ability",
     "should be able to", "missing the", "requesting",
     "looking for", "asking for", "interested in",
 ]
 
 
-def extract_feature_requests(call: dict) -> list[str]:
-    """Extract potential feature requests from summary and transcript."""
-    features = []
+def extract_feature_requests(call: dict) -> list[dict]:
+    """Extract potential feature-request sentences and the keywords they contain."""
     summary = extract_summary_text(call).lower()
     transcript = call.get("transcript") or {}
     sentences = transcript.get("data", [])
 
-    # Check summary for feature keywords
-    for keyword in FEATURE_KEYWORDS:
-        if keyword in summary:
-            # Find the sentence containing the keyword
-            for s in sentences:
-                text = s.get("sentence", "").lower()
-                if keyword in text and len(text) > 20:
-                    features.append(s.get("sentence", "").strip())
-                    break
+    matches = []
+    seen = set()
+    all_keywords = SPECIFIC_FEATURE_KEYWORDS + REQUEST_PHRASES
+    for keyword in all_keywords:
+        if keyword not in summary:
+            continue
+        for s in sentences:
+            text = s.get("sentence", "").strip()
+            text_lower = text.lower()
+            if keyword in text_lower and len(text) > 20:
+                key = (call["meeting_id"], text_lower[:120])
+                if key in seen:
+                    continue
+                seen.add(key)
+                matched = [kw for kw in SPECIFIC_FEATURE_KEYWORDS if kw in text_lower]
+                matches.append({
+                    "sentence": text,
+                    "matched_keywords": matched,
+                    "meeting_id": call["meeting_id"],
+                    "title": extract_meeting_title(call),
+                    "date": extract_meeting_date(call),
+                })
+                break
+    return matches
 
-    return list(set(features))[:5]  # Deduplicate and limit
+
+def extract_report_subtypes(df_features: pd.DataFrame) -> list[dict]:
+    """Group generic 'report' mentions into concrete sub-types from context."""
+    report_sentences = df_features[df_features["sentence"].str.lower().str.contains(r"\breport", regex=True)]["sentence"].tolist()
+    subtype_counter = Counter()
+
+    # Recognised report qualifiers; longer phrases first so they match before single words.
+    qualifiers = [
+        'iso 27001 readiness', 'iso 27001', 'soc 2', 'pci dss', 'hipaa',
+        'compliance', 'audit', 'executive', 'csv', 'pdf', 'excel',
+        'incident', 'on-demand', 'on demand', 'scheduled', 'monthly', 'weekly',
+        'vulnerability', 'threat', 'security', 'customer', 'backup',
+        'custom', 'detailed', 'granular',
+    ]
+
+    for sentence in report_sentences:
+        text = sentence.lower()
+        # Find report-word positions and attach the nearest meaningful qualifier.
+        for match in re.finditer(r"\b(report|reports|reporting)\b", text):
+            start = max(0, match.start() - 80)
+            window = text[start:match.start()]
+            subtype = "general"
+            for q in qualifiers:
+                if q in window:
+                    subtype = q
+                    break
+            subtype_counter[subtype] += 1
+
+    return [{"subtype": k.replace("on demand", "on-demand"), "count": v} for k, v in subtype_counter.most_common(8)]
+
+
+def build_keyword_details(df_features: pd.DataFrame, keyword_counts: dict, type_map: dict, category_map: dict) -> dict:
+    """For each top keyword, compute call-type and category context plus example snippets."""
+    details = {}
+    for kw in list(keyword_counts.keys())[:8]:
+        rows = df_features[df_features["sentence"].str.lower().str.contains(kw, regex=False)].copy()
+        if rows.empty:
+            continue
+        rows["call_type"] = rows["meeting_id"].map(type_map).fillna("unknown")
+        rows["category"] = rows["meeting_id"].map(category_map).fillna("Other")
+        type_counts = rows["call_type"].value_counts().to_dict()
+        cat_counts = rows["category"].value_counts().to_dict()
+        top_type = max(type_counts, key=type_counts.get)
+        top_cat = max(cat_counts, key=cat_counts.get)
+        examples = rows.head(3)[["sentence", "title", "call_type", "category"]].to_dict("records")
+        for ex in examples:
+            ex["sentence"] = ex["sentence"][:180]
+        details[kw] = {
+            "count": int(keyword_counts[kw]),
+            "dominant_call_type": top_type,
+            "dominant_category": top_cat,
+            "call_type_counts": {k: int(v) for k, v in type_counts.items()},
+            "category_counts": {k: int(v) for k, v in cat_counts.items()},
+            "examples": examples,
+        }
+    return details
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +267,160 @@ def build_escalation_chains(calls: list[dict], type_map: dict) -> list[dict]:
     # Sort by number of calls (most complex chains first)
     chains.sort(key=lambda x: len(x["calls"]), reverse=True)
     return chains[:20]  # Top 20
+
+
+# ---------------------------------------------------------------------------
+# Evidence-based recommendations
+# ---------------------------------------------------------------------------
+
+def load_analysis_context(output_dir: Path) -> dict:
+    """Load sentiment and taxonomy context needed for concrete recommendations."""
+    ctx = {}
+    import json
+    sent_path = output_dir / "04_sentiment_stats.json"
+    if sent_path.exists():
+        sent = json.loads(sent_path.read_text(encoding="utf-8"))
+        ctx["category_sentiment"] = sent.get("category_sentiment", {})
+        ctx["problem_zones"] = sent.get("problem_zones", [])
+        ctx["strong_zones"] = sent.get("strong_zones", [])
+    topics_path = output_dir / "topics.json"
+    if topics_path.exists():
+        topics = json.loads(topics_path.read_text(encoding="utf-8"))
+        ctx["top_categories"] = topics.get("business_taxonomy", {}).get("top_categories", [])
+    return ctx
+
+
+def build_recommendations(
+    output_dir: Path,
+    keyword_counts: dict,
+    keyword_details: dict,
+    report_subtypes: list[dict],
+    churn_narratives: list[dict],
+    risk_distribution: dict,
+    action_counts: dict,
+    carry_forward_total: int,
+) -> list[dict]:
+    """Generate specific, source-tagged recommendations with evidence bullets."""
+    ctx = load_analysis_context(output_dir)
+    recs = []
+
+    # 1. Report gap
+    report_kw = "report"
+    report_detail = keyword_details.get(report_kw, {})
+    report_examples = report_detail.get("examples", [])
+    report_examples_titles = [e.get("title", "") for e in report_examples[:3]]
+    report_call_count = sum(report_detail.get("call_type_counts", {}).values()) or len(report_examples)
+    subtype_bullets = [f"{s['subtype']} ({s['count']})" for s in report_subtypes if s['subtype'] != 'general'][:3]
+    recs.append({
+        "rank": 1,
+        "owner": "Product",
+        "title": f"Close the '{report_kw}' gap with exportable compliance reports",
+        "headline": f"'{report_kw.title()}' is the #1 specific signal ({report_detail.get('count', keyword_counts.get(report_kw, 0))} mentions), driven by audit and compliance workflows.",
+        "evidence": [
+            f"{report_detail.get('count', keyword_counts.get(report_kw, 0))} report mentions across {report_call_count} calls",
+            f"Top contexts: {', '.join(subtype_bullets)}" if subtype_bullets else "",
+            f"Mostly in {report_detail.get('dominant_call_type', 'unknown')} calls tagged '{report_detail.get('dominant_category', 'Other')}'",
+        ],
+        "source_calls": report_examples_titles,
+        "metrics": {
+            "mentions": report_detail.get("count", keyword_counts.get(report_kw, 0)),
+            "call_count": report_call_count,
+            "dominant_call_type": report_detail.get("dominant_call_type", "unknown"),
+            "dominant_category": report_detail.get("dominant_category", "Other"),
+        },
+    })
+
+    # 2. Platform Reliability
+    problem = next((z for z in ctx.get("problem_zones", [])), None)
+    if problem:
+        topic = problem.get("topic", "Platform Reliability")
+        ctype = problem.get("call_type", "support")
+        recs.append({
+            "rank": 2,
+            "owner": "Engineering",
+            "title": f"Prioritize fixes in '{topic}'",
+            "headline": f"{topic} × {ctype.title()} is the lowest sentiment zone ({problem.get('sentiment', 0)}/5, {problem.get('call_count', 0)} calls, {problem.get('negative_pct', 0)}% negative).",
+            "evidence": [
+                f"Lowest sentiment: {problem.get('sentiment', 0)}/5",
+                f"{problem.get('call_count', 0)} calls, {problem.get('negative_pct', 0)}% negative sentences",
+                "Outages, incidents and data gaps are the core drivers",
+            ],
+            "source_calls": [],
+            "metrics": {
+                "sentiment": problem.get("sentiment", 0),
+                "call_count": problem.get("call_count", 0),
+                "negative_pct": problem.get("negative_pct", 0),
+            },
+        })
+
+    # 3. Billing & Contracts
+    top_cat = next((c for c in ctx.get("top_categories", []) if c["category"] == "Billing & Contracts"), None)
+    if top_cat:
+        cat_sent = top_cat.get("avg_sentiment")
+        recs.append({
+            "rank": 3,
+            "owner": "Sales / CS / Support",
+            "title": "Standardize Billing & Contracts playbooks",
+            "headline": f"Billing & Contracts is the largest category ({top_cat.get('count', 0)} calls, {top_cat.get('pct_of_total', 0)}% of volume), concentrated in external calls ({top_cat.get('dominant_pct', 0)}%).",
+            "evidence": [
+                f"{top_cat.get('count', 0)} calls tagged Billing & Contracts",
+                f"Dominant in {top_cat.get('dominant_call_type', 'external')} calls ({top_cat.get('dominant_pct', 0)}%)",
+                f"Category sentiment: {cat_sent}/5" if cat_sent is not None else "",
+                "Seat overages, invoice adjustments and renewal terms dominate",
+            ],
+            "source_calls": [],
+            "metrics": {
+                "count": top_cat.get("count", 0),
+                "pct": top_cat.get("pct_of_total", 0),
+                "dominant_call_type": top_cat.get("dominant_call_type", "external"),
+                "avg_sentiment": cat_sent,
+            },
+        })
+
+    # 4. Churn intervention
+    high_risk_count = risk_distribution.get("High", 0)
+    medium_risk_count = risk_distribution.get("Medium", 0)
+    top_risk_accounts = [a.get("account", "") for a in churn_narratives[:3]]
+    recs.append({
+        "rank": 4,
+        "owner": "Sales / Customer Success",
+        "title": f"Executive intervention for {high_risk_count} high-risk accounts",
+        "headline": f"{high_risk_count} high-risk + {medium_risk_count} medium-risk calls flagged by rule-based churn scoring.",
+        "evidence": [
+            f"{high_risk_count} high-risk, {medium_risk_count} medium-risk calls",
+            "Top signals: escalation requested, product dissatisfaction, competitor mentions, executive involvement",
+            f"Top accounts: {', '.join(top_risk_accounts)}" if top_risk_accounts else "",
+        ],
+        "source_calls": [a.get("title", "") for a in churn_narratives[:3]],
+        "metrics": {
+            "high_risk": high_risk_count,
+            "medium_risk": medium_risk_count,
+        },
+    })
+
+    # 5. Action-item tracking
+    recs.append({
+        "rank": 5,
+        "owner": "Operations / Analytics",
+        "title": "Build closed-loop action-item tracking",
+        "headline": f"{carry_forward_total} open action items sit in call summaries without a visible owner pipeline.",
+        "evidence": [
+            f"{carry_forward_total} carry-forward actions extracted",
+            f"Support: {action_counts.get('support', {}).get('avg_per_call', 0)} avg per call, External: {action_counts.get('external', {}).get('avg_per_call', 0)} avg per call",
+            "Without tracking, customer commitments slip between support, sales and success handoffs",
+        ],
+        "source_calls": [],
+        "metrics": {
+            "carry_forward_total": carry_forward_total,
+            "support_avg": action_counts.get("support", {}).get("avg_per_call", 0),
+            "external_avg": action_counts.get("external", {}).get("avg_per_call", 0),
+        },
+    })
+
+    # Clean empty evidence strings
+    for r in recs:
+        r["evidence"] = [e for e in r["evidence"] if e]
+    return recs
 
 
 # ---------------------------------------------------------------------------
@@ -300,29 +527,25 @@ def main():
 
     feature_rows = []
     for call in calls:
-        features = extract_feature_requests(call)
-        if features:
-            for feat in features:
-                feature_rows.append({
-                    "meeting_id": call["meeting_id"],
-                    "title": extract_meeting_title(call),
-                    "date": extract_meeting_date(call),
-                    "feature_request": feat,
-                })
+        feature_rows.extend(extract_feature_requests(call))
 
     df_features = pd.DataFrame(feature_rows)
-    print(f"Total feature mentions: {len(df_features)}")
+    print(f"Total feature-request sentences: {len(df_features)}")
 
-    # Count by keyword
-    all_features = " ".join(df_features["feature_request"].str.lower())
+    # Count specific keywords by number of sentences that contain them
     keyword_counts = {}
-    for kw in FEATURE_KEYWORDS:
-        count = all_features.count(kw)
+    for kw in SPECIFIC_FEATURE_KEYWORDS:
+        count = df_features["sentence"].str.lower().str.contains(kw, regex=False).sum()
         if count > 0:
-            keyword_counts[kw] = count
-
+            keyword_counts[kw] = int(count)
     keyword_counts = dict(sorted(keyword_counts.items(), key=lambda x: x[1], reverse=True))
-    print(f"\nTop feature keywords:")
+
+    # Generic request phrases counted separately
+    generic_count = 0
+    for phrase in REQUEST_PHRASES:
+        generic_count += df_features["sentence"].str.lower().str.contains(phrase, regex=False).sum()
+    print(f"\nSpecific feature signals: {sum(keyword_counts.values())} | Generic request phrases: {generic_count}")
+    print(f"\nTop specific feature keywords:")
     for kw, count in list(keyword_counts.items())[:15]:
         print(f"  {kw}: {count}")
 
@@ -370,13 +593,20 @@ def main():
     save_chart(fig, "05_churn_score_histogram.png")
     plt.close(fig)
 
-    # Feature request frequency
+    # Feature request frequency chart (specific keywords only — no vague "feature request")
     if keyword_counts:
         fig, ax = create_chart_fig("05_feature_requests.png")
-        top_kws = list(keyword_counts.items())[:15]
-        ax.barh([k[0] for k in top_kws], [k[1] for k in top_kws], color="steelblue")
+        top_kws = list(keyword_counts.items())[:12]
+        y_pos = range(len(top_kws))
+        ax.barh(y_pos, [k[1] for k in top_kws], color="#1f77b4")
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels([k[0] for k in top_kws])
+        ax.invert_yaxis()
         ax.set_xlabel("Mentions")
-        ax.set_title("Top Feature Request Keywords")
+        # value labels
+        for i, (_, count) in enumerate(top_kws):
+            ax.text(count + 0.8, i, str(int(count)), va="center", fontsize=9)
+        ax.set_xlim(0, max(k[1] for k in top_kws) * 1.18)
         save_chart(fig, "05_feature_requests.png")
         plt.close(fig)
 
@@ -394,6 +624,15 @@ def main():
     # ------------------------------------------------------------------
     # Enriched data for PPT
     # ------------------------------------------------------------------
+
+    # Load business taxonomy assignments for category context
+    category_map = {}
+    biz_path = OUTPUT_DIR / "topics.json"
+    if biz_path.exists():
+        import json
+        biz_data = json.loads(biz_path.read_text(encoding="utf-8"))
+        for a in biz_data.get("business_taxonomy", {}).get("assignments", []):
+            category_map[str(a.get("meeting_id", ""))] = a.get("primary", "Other")
 
     # Churn narratives: build 1-2 sentence context for high-risk accounts
     churn_narratives = []
@@ -431,32 +670,28 @@ def main():
             "conclusion": conclusion,
         })
 
-    # Feature samples: top 3 sample sentences per keyword, with full call context
-    feature_samples = {}
-    for kw in list(keyword_counts.keys())[:8]:
-        samples = []
-        for _, row in df_features.iterrows():
-            if kw in row["feature_request"].lower():
-                samples.append({
-                    "sentence": row["feature_request"][:200],
-                    "title": row["title"],
-                    "meeting_id": row["meeting_id"],
-                    "date": row["date"],
-                })
-            if len(samples) >= 3:
-                break
-        feature_samples[kw] = samples
+    # Feature details: context, subtypes and examples for the top keywords
+    report_subtypes = extract_report_subtypes(df_features)
+    keyword_details = build_keyword_details(df_features, keyword_counts, type_map, category_map)
 
-    # Representative feature-request calls (one per top keyword for the PPT cards)
+    # Rich callouts for the PPT cards
     feature_callouts = []
     for kw, count in list(keyword_counts.items())[:5]:
-        sample = next((s for s in feature_samples.get(kw, [])), None)
-        feature_callouts.append({
+        detail = keyword_details.get(kw, {})
+        examples = detail.get("examples", [])
+        example = examples[0] if examples else {}
+        callouts = {
             "keyword": kw,
-            "count": count,
-            "sample_title": sample["title"] if sample else "",
-            "sample_sentence": sample["sentence"] if sample else "",
-        })
+            "count": int(count),
+            "dominant_call_type": detail.get("dominant_call_type", "unknown"),
+            "dominant_category": detail.get("dominant_category", "Other"),
+            "sample_title": example.get("title", ""),
+            "sample_sentence": example.get("sentence", ""),
+            "sample_call_type": example.get("call_type", "unknown"),
+            "sample_category": example.get("category", "Other"),
+            "subtypes": [s for s in report_subtypes if s["subtype"] != "general"] if kw == "report" else [],
+        }
+        feature_callouts.append(callouts)
 
     # Action items per call type (heuristic: count explicit action/follow-up language)
     action_item_keywords = ["action item", "follow up", "follow-up", "next step", "todo", "to do", "will do", "need to"]
@@ -518,13 +753,32 @@ def main():
     totals = [action_counts[c]["action_mentions"] for c in ctypes]
     bars = ax.bar(ctypes, avgs, color=["#1a237e", "#0078d4", "#ff6b35"])
     ax.set_ylabel("Avg Action Items per Call")
-    ax.set_title("Action Items by Call Type")
+    ymax = max(avgs) * 1.35 if avgs else 1
+    ax.set_ylim(0, ymax)
     for bar, total in zip(bars, totals):
         height = bar.get_height()
-        ax.text(bar.get_x() + bar.get_width()/2., height + 0.05,
-                f"{height:.1f}\n({total} total)", ha="center", va="bottom")
+        ax.text(bar.get_x() + bar.get_width()/2., height + ymax*0.02,
+                f"{height:.1f} avg\n({total} total)", ha="center", va="bottom", fontsize=9)
     save_chart(fig, "05_action_items_by_type.png")
     plt.close(fig)
+
+    # ------------------------------------------------------------------
+    # Recommendations
+    # ------------------------------------------------------------------
+    risk_distribution = df_churn["risk_level"].value_counts().to_dict()
+    recommendations = build_recommendations(
+        OUTPUT_DIR,
+        keyword_counts,
+        keyword_details,
+        report_subtypes,
+        churn_narratives,
+        risk_distribution,
+        action_counts,
+        len(carry_forward_actions),
+    )
+    print("\n--- Evidence-Based Recommendations ---")
+    for r in recommendations:
+        print(f"  {r['rank']}. [{r['owner']}] {r['title']}")
 
     # ------------------------------------------------------------------
     # Save
@@ -541,12 +795,19 @@ def main():
     }, "05_churn_scores.json")
 
     save_json({
-        "total_mentions": len(df_features),
+        "total_mentions": int(len(df_features)),
+        "specific_total": int(sum(keyword_counts.values())),
+        "generic_phrase_count": int(generic_count),
         "top_keywords": keyword_counts,
-        "feature_samples": feature_samples,
+        "report_subtypes": report_subtypes,
+        "keyword_details": keyword_details,
         "feature_callouts": feature_callouts,
-        "requests": df_features.to_dict("records")[:50],
+        "requests": [{k: v for k, v in row.items() if k != "matched_keywords"} for row in df_features.to_dict("records")[:50]],
     }, "05_feature_requests.json")
+
+    save_json({
+        "recommendations": recommendations,
+    }, "05_recommendations.json")
 
     save_json({
         "total_accounts_with_chains": len(chains),

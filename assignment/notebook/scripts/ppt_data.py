@@ -79,6 +79,7 @@ class PresentationData:
     sentiment: SentimentByType = field(default_factory=SentimentByType)
     sentiment_interpretation: dict = field(default_factory=dict)
     topic_cross: dict = field(default_factory=dict)
+    category_sentiment: dict = field(default_factory=dict)
     problem_zones: list[dict] = field(default_factory=list)
     strong_zones: list[dict] = field(default_factory=list)
     watch_zone: dict = field(default_factory=dict)
@@ -109,6 +110,9 @@ class PresentationData:
     carry_forward_actions: dict[str, dict] = field(default_factory=dict)
     carry_forward_total: int = 0
     escalation_chains: list[dict] = field(default_factory=list)
+
+    # Recommendations
+    recommendations: list[dict] = field(default_factory=list)
 
     # Warnings
     warnings: list[str] = field(default_factory=list)
@@ -219,6 +223,7 @@ def load_presentation_data(output_dir: Path | None = None) -> PresentationData:
     data.sentiment.internal_neg = by_type.get("negative_pct", {}).get("internal")
     data.sentiment_interpretation = sentiment.get("interpretation", {})
     data.topic_cross = sentiment.get("topic_cross", {})
+    data.category_sentiment = sentiment.get("category_sentiment", {})
     data.problem_zones = sentiment.get("problem_zones", [])
     data.strong_zones = sentiment.get("strong_zones", [])
     data.watch_zone = sentiment.get("watch_zone", {})
@@ -274,6 +279,10 @@ def load_presentation_data(output_dir: Path | None = None) -> PresentationData:
     data.carry_forward_actions = esc.get("carry_forward_actions", {})
     data.carry_forward_total = esc.get("carry_forward_total", 0)
     data.escalation_chains = esc.get("chains", [])
+
+    # Recommendations
+    rec = load_json(output_dir / "05_recommendations.json")
+    data.recommendations = rec.get("recommendations", [])
 
     data.warnings.extend(validate_ppt_data(data))
     return data

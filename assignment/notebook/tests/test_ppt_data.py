@@ -108,6 +108,35 @@ def test_carry_forward_actions_loaded():
         assert sum(data.carry_forward_actions[c]["count"] for c in ["support", "external", "internal"]) == data.carry_forward_total
 
 
+def test_recommendations_loaded():
+    """Evidence-based recommendations should be loaded from 05_recommendations.json."""
+    import json
+    from ppt_data import load_presentation_data
+
+    run_dir = get_latest_run_dir()
+    data = load_presentation_data(run_dir)
+    path = run_dir / "05_recommendations.json"
+    raw = json.loads(path.read_text())
+
+    assert len(data.recommendations) == len(raw.get("recommendations", []))
+    if data.recommendations:
+        assert "owner" in data.recommendations[0]
+        assert "evidence" in data.recommendations[0]
+
+
+def test_category_sentiment_loaded():
+    """Category-level sentiment should be loaded from 04_sentiment_stats.json."""
+    import json
+    from ppt_data import load_presentation_data
+
+    run_dir = get_latest_run_dir()
+    data = load_presentation_data(run_dir)
+    path = run_dir / "04_sentiment_stats.json"
+    raw = json.loads(path.read_text())
+
+    assert data.category_sentiment == raw.get("category_sentiment", {})
+
+
 def test_no_hardcoded_sentiment_in_ppt_script():
     """06_generate_ppt.py must not contain old hardcoded sentiment values."""
     ppt_script = Path(__file__).parent.parent / "06_generate_ppt.py"
@@ -140,6 +169,10 @@ if __name__ == "__main__":
     print("  OK: business taxonomy loaded")
     test_carry_forward_actions_loaded()
     print("  OK: carry-forward actions loaded")
+    test_recommendations_loaded()
+    print("  OK: recommendations loaded")
+    test_category_sentiment_loaded()
+    print("  OK: category sentiment loaded")
     test_no_hardcoded_sentiment_in_ppt_script()
     print("  OK: no hardcoded sentiment in PPT script")
     test_ppt_data_warns_on_missing_files()
