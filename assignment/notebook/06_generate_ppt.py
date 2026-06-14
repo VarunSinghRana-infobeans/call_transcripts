@@ -254,6 +254,35 @@ def add_text(slide, left, top, width, height, text, size=FONT_BODY, bold=False, 
     return box
 
 
+def add_bullets(slide, left, top, width, height, items, size=FONT_BODY, color=C_TEXT, align=PP_ALIGN.LEFT,
+                bullet="•", max_items=6):
+    """Add a bulleted textbox with one paragraph per item.
+
+    Items are trimmed to the available vertical space by limiting the count.
+    """
+    left, top, width, height = fit_to_bounds(left, top, width, height)
+    box = slide.shapes.add_textbox(left, top, width, height)
+    tf = box.text_frame
+    tf.word_wrap = True
+    tf.margin_left = Pt(0)
+    tf.margin_right = Pt(0)
+    tf.margin_top = Pt(0)
+    tf.margin_bottom = Pt(0)
+    tf.auto_size = MSO_AUTO_SIZE.NONE
+
+    items = [str(i) for i in items if str(i).strip()]
+    items = items[:max_items]
+    for idx, item in enumerate(items):
+        if idx == 0:
+            p = tf.paragraphs[0]
+        else:
+            p = tf.add_paragraph()
+        p.text = f"{bullet} {item}"
+        style_text(p, size, bold=False, color=color, align=align)
+        p.space_after = Pt(2)
+    return box
+
+
 def add_slide_title(slide, title, subtitle=""):
     """Plain title + optional subtitle with a colored underline."""
     add_text(slide, MARGIN, TITLE_Y, CONTENT_W, TITLE_H,
@@ -315,12 +344,21 @@ def add_circle_badge(slide, left, top, size, text, color=C_SECONDARY, font_size=
 # Grid-aligned KPI tiles
 # ---------------------------------------------------------------------------
 def add_kpi_row(slide, kpis, y, box_w, box_h, gap=Inches(0.12),
-                card_fill=C_BG, label_color=C_LIGHT, value_size=FONT_KPI):
-    """Add a row of equal KPI cards aligned to a strict grid."""
+                card_fill=C_BG, label_color=C_LIGHT, default_value_size=FONT_KPI):
+    """Add a row of equal KPI cards aligned to a strict grid.
+
+    Each KPI can be a 3-tuple (value, label, color) or 4-tuple
+    (value, label, color, value_font_size) for long values like date ranges.
+    """
     n = len(kpis)
     total_w = n * box_w + (n - 1) * gap
     start_x = MARGIN + (CONTENT_W - total_w) / 2
-    for i, (val, label, color) in enumerate(kpis):
+    for i, item in enumerate(kpis):
+        if len(item) == 4:
+            val, label, color, value_size = item
+        else:
+            val, label, color = item
+            value_size = default_value_size
         left = start_x + i * (box_w + gap)
         add_card(slide, left, y, box_w, box_h, fill=card_fill)
         add_text(slide, left, y + Inches(0.08), box_w, Inches(0.52),
@@ -550,7 +588,7 @@ def add_dataset_slide(prs, data: PresentationData):
         (data.total_calls, "Total Calls", C_PRIMARY),
         (fmt_num(data.duration_mean), "Avg Duration (min)", C_SECONDARY),
         (fmt_num(data.avg_sentiment), f"Avg Sentiment ({sentiment_label})", sentiment_color(data.avg_sentiment or 3)),
-        (_fmt_date_range(data.date_min, data.date_max), "Date Range", C_ACCENT),
+        (_fmt_date_range(data.date_min, data.date_max), "Date Range", C_ACCENT, FONT_SUBTITLE),
     ]
     # 4 tiles must fit in 9" content width with 0.12" gaps
     box_w = Inches(2.16)
@@ -601,7 +639,7 @@ def add_topic_slide(prs, data: PresentationData):
     narratives = biz.get("narratives", {})
 
     clusters = top_categories[:3]
-    card_h = Inches(1.05)
+    card_h = Inches(1.02)
     y = CONTENT_Y
     for cat_info in clusters:
         name = cat_info.get("category", "Unknown")
@@ -614,7 +652,8 @@ def add_topic_slide(prs, data: PresentationData):
         sent_color = sentiment_color(avg_sentiment) if avg_sentiment is not None else C_LIGHT
 
         add_card(slide, RIGHT_X, y, RIGHT_W, card_h)
-        add_text(slide, RIGHT_X + Inches(0.10), y + Inches(0.08), RIGHT_W - Inches(0.20), Inches(0.26),
+        # Title stops before the sentiment badge to avoid overlap
+        add_text(slide, RIGHT_X + Inches(0.10), y + Inches(0.08), RIGHT_W - Inches(1.10), Inches(0.26),
                  title_text, FONT_SMALL, bold=True, color=C_PRIMARY)
         if sentiment_text:
             add_text(slide, RIGHT_X + RIGHT_W - Inches(1.05), y + Inches(0.08), Inches(0.95), Inches(0.22),
@@ -623,7 +662,7 @@ def add_topic_slide(prs, data: PresentationData):
                  narrative, FONT_TINY, color=C_TEXT)
         y += card_h + Inches(0.07)
 
-    # Conclusion tile on the right side where space remains
+    # Conclusion tile placed below the stacked category cards
     if top_categories:
         top = top_categories[0]
         conclusion = (
@@ -631,10 +670,11 @@ def add_topic_slide(prs, data: PresentationData):
             f"It is dominant in {top.get('dominant_call_type', 'external')} calls ({top.get('dominant_pct', 0)}%). "
             f"Product and support should align on {top['category'].lower()} playbooks."
         )
-        conclusion_y = min(y + Inches(0.05), Inches(4.55))
-        add_card(slide, RIGHT_X, conclusion_y, RIGHT_W, Inches(0.70), line=C_SECONDARY)
-        add_text(slide, RIGHT_X + Inches(0.10), conclusion_y + Inches(0.08), RIGHT_W - Inches(0.20), Inches(0.54),
-                 fit_text(conclusion, RIGHT_W - Inches(0.20), FONT_TINY, 3), FONT_TINY, color=C_TEXT)
+        conclusion_y = y + Inches(0.05)
+        concl_h = Inches(0.95)
+        add_card(slide, RIGHT_X, conclusion_y, RIGHT_W, concl_h, line=C_SECONDARY)
+        add_text(slide, RIGHT_X + Inches(0.10), conclusion_y + Inches(0.08), RIGHT_W - Inches(0.20), Inches(0.80),
+                 fit_text(conclusion, RIGHT_W - Inches(0.20), FONT_TINY, 5), FONT_TINY, color=C_TEXT)
 
     check(slide, "Topics")
     return slide
@@ -673,11 +713,11 @@ def add_sentiment_slide(prs, data: PresentationData):
                  explanation, FONT_TINY, color=C_TEXT)
         y += card_h + Inches(0.08)
 
-    # Scale interpretation box
+    # Scale interpretation box (full-width footer to avoid truncating any labels)
     scale = data.sentiment_interpretation.get("scale", {})
-    scale_text = " · ".join([f"{k}: {v}" for k, v in list(scale.items())[:3]])
-    add_text(slide, CHART_X, CONTENT_Y + Inches(3.55), CHART_W, Inches(0.30),
-             fit_text(scale_text, CHART_W, FONT_MICRO, 2), FONT_MICRO, color=C_LIGHT)
+    scale_text = " · ".join([f"{k}: {v}" for k, v in scale.items()])
+    add_text(slide, MARGIN, Inches(5.05), CONTENT_W, Inches(0.45),
+             fit_text(scale_text, CONTENT_W, FONT_MICRO, 3), FONT_MICRO, color=C_LIGHT, align=PP_ALIGN.CENTER)
 
     check(slide, "Sentiment")
     return slide
@@ -700,19 +740,33 @@ def _zone_card(slide, x, y, zone, color, label_text):
              why, FONT_TINY, color=C_TEXT)
 
 
+def _short_zone_why(zone: dict) -> str:
+    """Return a concise insight plus an example count that fits a small card."""
+    why = zone.get("why", "")
+    # Split insight from examples
+    if "Examples:" in why:
+        insight, examples = why.split("Examples:", 1)
+        insight = insight.strip()
+        example_count = len([e for e in examples.split(",") if e.strip()])
+        suffix = "examples" if example_count != 1 else "example"
+        return f"{insight} ({example_count} {suffix})."
+    return why
+
+
 def add_problem_zones_slide(prs, data: PresentationData):
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     add_slide_title(slide, "Where Sentiment Goes Negative",
                     "Average sentiment score per call type × topic category. Red = problem zones.")
 
     # Heatmap on the left; cards stacked on the right where space is available
-    add_chart_if_exists(slide, "04_sentiment_heatmap_by_taxonomy.png", CHART_X, CONTENT_Y, CHART_W, Inches(3.6))
+    add_chart_if_exists(slide, "04_sentiment_heatmap_by_taxonomy.png", CHART_X, CONTENT_Y, CHART_W, Inches(3.5))
 
     low_zone = data.problem_zones[0] if data.problem_zones else {"topic": "N/A", "call_type": "N/A", "sentiment": 0, "why": "No data", "call_count": 0, "label": ""}
     watch_zone = data.watch_zone if data.watch_zone else low_zone
     high_zone = data.strong_zones[0] if data.strong_zones else {"topic": "N/A", "call_type": "N/A", "sentiment": 0, "why": "No data", "call_count": 0, "label": ""}
 
-    card_h = Inches(1.08)
+    card_h = Inches(1.32)
+    gap = Inches(0.05)
     y = CONTENT_Y
     for zone, color, label_prefix in [
         (low_zone, C_RED, "LOW"),
@@ -721,18 +775,18 @@ def add_problem_zones_slide(prs, data: PresentationData):
     ]:
         label = zone.get("label", "")
         label_text = f"{label_prefix} · {label}" if label else label_prefix
-        why = fit_text(zone.get("why", ""), RIGHT_W - Inches(0.22), FONT_TINY, 5)
+        why = fit_text(_short_zone_why(zone), RIGHT_W - Inches(0.22), FONT_TINY, 4)
         add_card(slide, RIGHT_X, y, RIGHT_W, card_h, line=color)
-        add_text(slide, RIGHT_X + Inches(0.10), y + Inches(0.08), Inches(0.62), Inches(0.22),
+        add_text(slide, RIGHT_X + Inches(0.10), y + Inches(0.08), Inches(0.85), Inches(0.24),
                  label_text, FONT_MICRO, bold=True, color=color)
-        add_text(slide, RIGHT_X + Inches(0.76), y + Inches(0.08), RIGHT_W - Inches(0.86), Inches(0.26),
+        add_text(slide, RIGHT_X + Inches(0.98), y + Inches(0.08), RIGHT_W - Inches(1.08), Inches(0.26),
                  f"{zone['topic']} × {zone['call_type'].title()}", FONT_SMALL, bold=True, color=color)
-        add_text(slide, RIGHT_X + Inches(0.10), y + Inches(0.36), RIGHT_W - Inches(0.20), Inches(0.26),
+        add_text(slide, RIGHT_X + Inches(0.10), y + Inches(0.34), RIGHT_W - Inches(0.20), Inches(0.22),
                  f"Score: {fmt_num(zone.get('sentiment', 0))}/5 · {zone.get('call_count', 0)} calls · {fmt_pct(zone.get('negative_pct', 0))}% negative",
                  FONT_TINY, color=C_LIGHT)
-        add_text(slide, RIGHT_X + Inches(0.10), y + Inches(0.62), RIGHT_W - Inches(0.20), Inches(0.42),
+        add_text(slide, RIGHT_X + Inches(0.10), y + Inches(0.56), RIGHT_W - Inches(0.20), Inches(0.70),
                  why, FONT_TINY, color=C_TEXT)
-        y += card_h + Inches(0.07)
+        y += card_h + gap
 
     check(slide, "Problem Zones")
     return slide
@@ -750,23 +804,23 @@ def add_strong_zones_slide(prs, data: PresentationData):
         zones = [{"topic": "N/A", "call_type": "N/A", "sentiment": 0, "why": "No data", "call_count": 0, "label": ""}]
 
     card_w = Inches(2.95)
-    card_h = Inches(1.45)
-    base_y = Inches(3.85)
+    card_h = Inches(1.50)
+    base_y = Inches(3.78)
     xs = [MARGIN, MARGIN + Inches(3.05), MARGIN + Inches(6.10)]
 
     for x, zone in zip(xs, zones):
-        why = fit_text(zone.get("why", ""), card_w - Inches(0.24), FONT_TINY, 5)
+        why = fit_text(_short_zone_why(zone), card_w - Inches(0.24), FONT_TINY, 4)
         label = zone.get("label", "")
         label_text = f"HIGH · {label}" if label else "HIGH"
         add_card(slide, x, base_y, card_w, card_h, line=C_GREEN)
-        add_text(slide, x + Inches(0.12), base_y + Inches(0.10), Inches(0.65), Inches(0.24),
+        add_text(slide, x + Inches(0.12), base_y + Inches(0.08), Inches(0.65), Inches(0.24),
                  label_text, FONT_MICRO, bold=True, color=C_GREEN)
-        add_text(slide, x + Inches(0.80), base_y + Inches(0.10), card_w - Inches(0.92), Inches(0.28),
+        add_text(slide, x + Inches(0.80), base_y + Inches(0.08), card_w - Inches(0.92), Inches(0.28),
                  f"{zone['topic']} × {zone['call_type'].title()}", FONT_SMALL, bold=True, color=C_GREEN)
-        add_text(slide, x + Inches(0.12), base_y + Inches(0.40), card_w - Inches(0.24), Inches(0.32),
+        add_text(slide, x + Inches(0.12), base_y + Inches(0.36), card_w - Inches(0.24), Inches(0.28),
                  f"Score: {fmt_num(zone.get('sentiment', 0))}/5 · {zone.get('call_count', 0)} calls · {fmt_pct(zone.get('negative_pct', 0))}% negative",
                  FONT_TINY, color=C_LIGHT)
-        add_text(slide, x + Inches(0.12), base_y + Inches(0.74), card_w - Inches(0.24), Inches(0.62),
+        add_text(slide, x + Inches(0.12), base_y + Inches(0.66), card_w - Inches(0.24), Inches(0.78),
                  why, FONT_TINY, color=C_TEXT)
     check(slide, "Strong Zones")
     return slide
@@ -787,19 +841,19 @@ def add_churn_slide(prs, data: PresentationData):
              f"⚠  Flagged Accounts ({data.risk_distribution.high} high risk)", FONT_BODY, bold=True, color=C_RED)
 
     card_w = Inches(3.40)
-    card_h = Inches(1.85)
+    card_h = Inches(1.60)
     y = CONTENT_Y + Inches(0.38)
 
     for account in data.churn_narratives[:2]:
         add_card(slide, RIGHT_X, y, card_w, card_h, line=C_RED)
         account_name = account.get("account", "Unknown account")
-        title = fit_text(account.get("title", "Unknown"), card_w - Inches(0.24), FONT_SMALL, 2)
-        add_text(slide, RIGHT_X + Inches(0.12), y + Inches(0.12), card_w - Inches(0.24), Inches(0.45),
+        title = fit_text(account.get("title", "Unknown"), card_w - Inches(0.24), FONT_SMALL, 3)
+        add_text(slide, RIGHT_X + Inches(0.12), y + Inches(0.08), card_w - Inches(0.24), Inches(0.50),
                  title, FONT_SMALL, bold=True, color=C_TEXT)
-        add_text(slide, RIGHT_X + Inches(0.12), y + Inches(0.42), card_w - Inches(0.24), Inches(0.22),
+        add_text(slide, RIGHT_X + Inches(0.12), y + Inches(0.60), card_w - Inches(0.24), Inches(0.18),
                  f"Account: {account_name}  |  {account.get('call_type', 'unknown').title()} call", FONT_TINY, color=C_LIGHT)
         churn_score = account.get('churn_score', 0)
-        add_text(slide, RIGHT_X + Inches(0.12), y + Inches(0.64), card_w - Inches(0.24), Inches(0.22),
+        add_text(slide, RIGHT_X + Inches(0.12), y + Inches(0.80), card_w - Inches(0.24), Inches(0.18),
                  f"Churn signal: {churn_score} (scale 0-10+)  |  Sentiment: {account.get('sentiment_score', 0)}/5",
                  FONT_TINY, color=C_LIGHT)
 
@@ -807,24 +861,25 @@ def add_churn_slide(prs, data: PresentationData):
         if isinstance(signals, str):
             signals = [s.strip() for s in signals.split(",") if s.strip()]
         signal_text = "  |  ".join(_format_signal(s) for s in signals[:3])
-        signal_text = fit_text(signal_text, card_w - Inches(0.24), FONT_MICRO, 2)
-        add_text(slide, RIGHT_X + Inches(0.12), y + Inches(0.88), card_w - Inches(0.24), Inches(0.35),
+        signal_text = fit_text(signal_text, card_w - Inches(0.24), FONT_MICRO, 3)
+        add_text(slide, RIGHT_X + Inches(0.12), y + Inches(1.00), card_w - Inches(0.24), Inches(0.40),
                  signal_text, FONT_MICRO, color=C_TEXT)
 
         conclusion = fit_text(account.get("conclusion", ""), card_w - Inches(0.24), FONT_MICRO, 2)
-        add_text(slide, RIGHT_X + Inches(0.12), y + Inches(1.24), card_w - Inches(0.24), Inches(0.45),
+        add_text(slide, RIGHT_X + Inches(0.12), y + Inches(1.42), card_w - Inches(0.24), Inches(0.16),
                  conclusion, FONT_MICRO, bold=True, color=C_RED)
         y += card_h + Inches(0.10)
 
-    # Bottom insight tile
+    # Bottom insight tile placed below the account cards
     total_flagged = data.risk_distribution.high + data.risk_distribution.medium
     churn_source = (
         f"Conclusion: {total_flagged} of {data.total_calls} calls are medium/high risk. "
         f"Top signals: escalation, product dissatisfaction, competitor mentions. "
         f"Source: rule-based scoring on transcript + summary text."
     )
-    add_card(slide, MARGIN, Inches(5.00), CONTENT_W, Inches(0.60), line=C_RED)
-    add_text(slide, MARGIN + Inches(0.12), Inches(5.07), CONTENT_W - Inches(0.24), Inches(0.45),
+    footer_y = y + Inches(0.02)
+    add_card(slide, MARGIN, footer_y, CONTENT_W, Inches(0.52), line=C_RED)
+    add_text(slide, MARGIN + Inches(0.12), footer_y + Inches(0.07), CONTENT_W - Inches(0.24), Inches(0.38),
              fit_text(churn_source, CONTENT_W - Inches(0.24), FONT_TINY, 2), FONT_TINY, color=C_TEXT)
 
     check(slide, "Churn")
@@ -875,14 +930,11 @@ def add_feature_slide(prs, data: PresentationData):
         add_text(slide, RIGHT_X + Inches(0.54), y + Inches(0.34), RIGHT_W - Inches(0.64), Inches(0.20),
                  ctx_line, FONT_MICRO, color=C_LIGHT)
 
-        # Detail line: subtype or sample snippet
-        detail = ""
+        # Detail line: subtypes when available; otherwise a concise channel note
         if subtypes:
             detail = "Top contexts: " + ", ".join(f"{s['subtype']} ({s['count']})" for s in subtypes[:2])
-        elif sample_sentence:
-            detail = fit_text(f"'{sample_sentence[:90]}'", RIGHT_W - Inches(0.64), FONT_MICRO, 2)
         else:
-            detail = f"Mentioned {count} times across calls."
+            detail = f"Primary channel: {dominant_type} · {dominant_cat}"
         add_text(slide, RIGHT_X + Inches(0.54), y + Inches(0.54), RIGHT_W - Inches(0.64), Inches(0.34),
                  detail, FONT_MICRO, color=C_TEXT)
 
@@ -918,7 +970,7 @@ def add_action_items_slide(prs, data: PresentationData):
     ]
 
     card_w = Inches(4.2)
-    card_h = Inches(0.85)
+    card_h = Inches(0.95)
     x = Inches(5.4)
     y = CONTENT_Y
     for title, body in insights:
@@ -926,7 +978,7 @@ def add_action_items_slide(prs, data: PresentationData):
         add_card(slide, x, y, card_w, card_h)
         add_text(slide, x + Inches(0.12), y + Inches(0.10), card_w - Inches(0.24), Inches(0.24),
                  title, FONT_SMALL, bold=True, color=C_SECONDARY)
-        add_text(slide, x + Inches(0.12), y + Inches(0.36), card_w - Inches(0.24), Inches(0.45),
+        add_text(slide, x + Inches(0.12), y + Inches(0.36), card_w - Inches(0.24), Inches(0.55),
                  body, FONT_TINY, color=C_TEXT)
         y += card_h + Inches(0.08)
     check(slide, "Action Items")
@@ -943,19 +995,20 @@ def add_carry_forward_slide(prs, data: PresentationData):
 
     # Right: top actions per type
     card_w = Inches(4.2)
-    card_h = Inches(0.95)
+    card_h = Inches(1.12)
     x = Inches(5.4)
     y = CONTENT_Y
     for ctype in ["support", "external", "internal"]:
         actions = data.carry_forward_actions.get(ctype, {}).get("top_actions", [])
         if actions:
             top = actions[0]
-            text = fit_text(f"{top.get('owner', 'Unknown')}: {top.get('text', '')}", card_w - Inches(0.24), FONT_TINY, 3)
+            raw_text = f"{top.get('owner', 'Unknown')}: {top.get('text', '')}"
+            text = fit_text(raw_text[:220], card_w - Inches(0.24), FONT_TINY, 4)
             add_card(slide, x, y, card_w, card_h)
             total_for_type = data.carry_forward_actions.get(ctype, {}).get("count", len(actions))
             add_text(slide, x + Inches(0.12), y + Inches(0.10), card_w - Inches(0.24), Inches(0.24),
                      f"{ctype.title()} (top 5 of {total_for_type})", FONT_SMALL, bold=True, color=C_SECONDARY)
-            add_text(slide, x + Inches(0.12), y + Inches(0.36), card_w - Inches(0.24), Inches(0.55),
+            add_text(slide, x + Inches(0.12), y + Inches(0.36), card_w - Inches(0.24), Inches(0.70),
                      text, FONT_TINY, color=C_TEXT)
             y += card_h + Inches(0.08)
 
@@ -972,13 +1025,23 @@ def add_carry_forward_slide(prs, data: PresentationData):
     return slide
 
 
+def _owner_color(owner: str) -> RGBColor:
+    return {
+        "Product": C_RED,
+        "Engineering": C_AMBER,
+        "Sales / CS": C_SECONDARY,
+        "Sales / Customer Success": C_SECONDARY,
+        "Support": C_SECONDARY,
+        "Operations / Analytics": C_GREEN,
+    }.get(owner, C_PRIMARY)
+
+
 def add_recommendations_slide(prs, data: PresentationData):
     slide = prs.slides.add_slide(prs.slide_layouts[6])
-    add_slide_title(slide, "Recommendations", "Prioritized actions with source evidence")
+    add_slide_title(slide, "Recommendations at a Glance", "Prioritized actions with source evidence")
 
     recs = data.recommendations[:5]
     if not recs:
-        # Fallback if recommendations file is missing
         recs = [{
             "rank": 1,
             "owner": "Product",
@@ -989,42 +1052,105 @@ def add_recommendations_slide(prs, data: PresentationData):
             "metrics": {},
         }]
 
-    card_h = Inches(0.70)
+    card_h = Inches(0.78)
     gap = Inches(0.05)
     y = CONTENT_Y
     for rec in recs:
         add_card(slide, MARGIN, y, CONTENT_W, card_h)
-        # Owner badge
-        owner_color = {
-            "Product": C_RED,
-            "Engineering": C_AMBER,
-            "Sales / CS": C_SECONDARY,
-            "Sales / Customer Success": C_SECONDARY,
-            "Support": C_SECONDARY,
-            "Operations / Analytics": C_GREEN,
-        }.get(rec.get("owner", ""), C_PRIMARY)
+        owner_color = _owner_color(rec.get("owner", ""))
         add_text(slide, MARGIN + Inches(0.10), y + Inches(0.08), Inches(1.55), Inches(0.20),
                  f"[{rec.get('owner', '')}]", FONT_MICRO, bold=True, color=owner_color)
         title_text = fit_text(rec.get("title", ""), CONTENT_W - Inches(1.85), FONT_SMALL, 1)
         add_text(slide, MARGIN + Inches(1.75), y + Inches(0.06), CONTENT_W - Inches(1.90), Inches(0.26),
                  title_text, FONT_SMALL, bold=True, color=C_TEXT)
 
-        # Evidence bullets + source calls
-        bullets = " · ".join(rec.get("evidence", []))
-        source_calls = rec.get("source_calls", [])
-        if source_calls:
-            source_text = "Sources: " + ", ".join(t[:55] for t in source_calls[:2])
-            full = f"{bullets}  |  {source_text}" if bullets else source_text
-        else:
-            full = bullets
-        full = fit_text(full, CONTENT_W - Inches(0.30), FONT_MICRO, 2)
-        add_text(slide, MARGIN + Inches(0.10), y + Inches(0.32), CONTENT_W - Inches(0.20), Inches(0.34),
-                 full, FONT_MICRO, color=C_TEXT)
+        # Use the concise headline instead of dense evidence; full evidence lives on detail slides
+        headline = fit_text(rec.get("headline", ""), CONTENT_W - Inches(0.30), FONT_TINY, 2)
+        add_text(slide, MARGIN + Inches(0.10), y + Inches(0.32), CONTENT_W - Inches(0.20), Inches(0.42),
+                 headline, FONT_TINY, color=C_TEXT)
 
         y += card_h + gap
 
     check(slide, "Recommendations")
     return slide
+
+
+def _add_single_recommendation_slide(prs, rec: dict):
+    """Add one full slide explaining a single recommendation."""
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    rank = rec.get("rank", 0)
+    title = rec.get("title", "Recommendation")
+    owner = rec.get("owner", "")
+    add_slide_title(slide, f"Rec {rank}: {title}",
+                    "What the data says, why it matters, and what to do about it")
+
+    # Owner badge below the slide title on the right
+    owner_color = _owner_color(owner)
+    badge_y = CONTENT_Y - Inches(0.05)
+    add_card(slide, Inches(8.25), badge_y, Inches(1.60), Inches(0.32), fill=owner_color)
+    add_text(slide, Inches(8.30), badge_y + Inches(0.03), Inches(1.50), Inches(0.26),
+             f"Owner: {owner}", FONT_MICRO, bold=True, color=C_WHITE, align=PP_ALIGN.CENTER)
+
+    # Two-column layout: Problem | Recommended Action
+    col_w = Inches(4.55)
+    card_h = Inches(1.35)
+    y = CONTENT_Y + Inches(0.35)
+
+    # Problem card
+    add_card(slide, MARGIN, y, col_w, card_h, line=C_RED)
+    add_text(slide, MARGIN + Inches(0.10), y + Inches(0.08), col_w - Inches(0.20), Inches(0.26),
+             "Problem", FONT_SMALL, bold=True, color=C_RED)
+    problem = fit_text(rec.get("problem", ""), col_w - Inches(0.20), FONT_TINY, 4)
+    add_text(slide, MARGIN + Inches(0.10), y + Inches(0.36), col_w - Inches(0.20), Inches(0.90),
+             problem, FONT_TINY, color=C_TEXT)
+
+    # Solution card
+    x2 = MARGIN + col_w + Inches(0.20)
+    add_card(slide, x2, y, col_w, card_h, line=C_SECONDARY)
+    add_text(slide, x2 + Inches(0.10), y + Inches(0.08), col_w - Inches(0.20), Inches(0.26),
+             "Recommended Action", FONT_SMALL, bold=True, color=C_SECONDARY)
+    solution = fit_text(rec.get("solution", ""), col_w - Inches(0.20), FONT_TINY, 4)
+    add_text(slide, x2 + Inches(0.10), y + Inches(0.36), col_w - Inches(0.20), Inches(0.90),
+             solution, FONT_TINY, color=C_TEXT)
+
+    # Evidence card (full width below)
+    evidence_y = y + card_h + Inches(0.08)
+    evidence = rec.get("evidence", [])
+    if evidence:
+        add_card(slide, MARGIN, evidence_y, CONTENT_W, Inches(0.70), line=C_AMBER)
+        add_text(slide, MARGIN + Inches(0.10), evidence_y + Inches(0.08), Inches(1.15), Inches(0.24),
+                 "Evidence", FONT_SMALL, bold=True, color=C_AMBER)
+        add_bullets(slide, MARGIN + Inches(1.30), evidence_y + Inches(0.08),
+                    CONTENT_W - Inches(1.45), Inches(0.54), evidence[:3],
+                    size=FONT_MICRO, color=C_TEXT, max_items=3)
+    else:
+        evidence_y -= Inches(0.08)
+
+    # Impact card (full width below evidence)
+    impact_y = evidence_y + Inches(0.82)
+    add_card(slide, MARGIN, impact_y, CONTENT_W, Inches(0.70), line=C_GREEN)
+    add_text(slide, MARGIN + Inches(0.10), impact_y + Inches(0.08), Inches(1.35), Inches(0.24),
+             "Expected Impact", FONT_SMALL, bold=True, color=C_GREEN)
+    impact = fit_text(rec.get("expected_impact", ""), CONTENT_W - Inches(1.60), FONT_TINY, 2)
+    add_text(slide, MARGIN + Inches(1.50), impact_y + Inches(0.10), CONTENT_W - Inches(1.65), Inches(0.50),
+             impact, FONT_TINY, color=C_TEXT)
+
+    # Source calls footer
+    source_calls = rec.get("source_calls", [])
+    if source_calls:
+        footer_y = impact_y + Inches(0.82)
+        source_text = "Source calls: " + ", ".join(t[:90] for t in source_calls[:2])
+        add_text(slide, MARGIN, footer_y, CONTENT_W, Inches(0.40),
+                 fit_text(source_text, CONTENT_W, FONT_MICRO, 2), FONT_MICRO, color=C_LIGHT)
+
+    check(slide, f"Rec {rank}")
+    return slide
+
+
+def add_recommendation_detail_slides(prs, data: PresentationData):
+    for rec in data.recommendations[:5]:
+        _add_single_recommendation_slide(prs, rec)
+    return None
 
 
 def add_reasonableness_slide(prs, data: PresentationData):
@@ -1161,7 +1287,8 @@ def main():
             ("Features", add_feature_slide, True),
             ("Action Items", add_action_items_slide, True),
             ("Carry-Forward Actions", add_carry_forward_slide, True),
-            ("Recommendations", add_recommendations_slide, True),
+            ("Recommendations at a Glance", add_recommendations_slide, True),
+            ("Recommendation Details", add_recommendation_detail_slides, True),
             ("AI Reasonableness Check", add_reasonableness_slide, True),
             ("Methodology", add_methodology_slide, True),
         ]

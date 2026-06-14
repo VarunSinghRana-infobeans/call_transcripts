@@ -300,7 +300,7 @@ def build_recommendations(
     action_counts: dict,
     carry_forward_total: int,
 ) -> list[dict]:
-    """Generate specific, source-tagged recommendations with evidence bullets."""
+    """Generate decision-ready recommendations: problem, evidence, solution, impact."""
     ctx = load_analysis_context(output_dir)
     recs = []
 
@@ -311,19 +311,23 @@ def build_recommendations(
     report_examples_titles = [e.get("title", "") for e in report_examples[:3]]
     report_call_count = sum(report_detail.get("call_type_counts", {}).values()) or len(report_examples)
     subtype_bullets = [f"{s['subtype']} ({s['count']})" for s in report_subtypes if s['subtype'] != 'general'][:3]
+    mentions = report_detail.get("count", keyword_counts.get(report_kw, 0))
     recs.append({
         "rank": 1,
         "owner": "Product",
         "title": f"Close the '{report_kw}' gap with exportable compliance reports",
-        "headline": f"'{report_kw.title()}' is the #1 specific signal ({report_detail.get('count', keyword_counts.get(report_kw, 0))} mentions), driven by audit and compliance workflows.",
+        "headline": f"'{report_kw.title()}' is the #1 specific signal ({mentions} mentions), driven by audit and compliance workflows.",
+        "problem": "Customers repeatedly ask for reports during audits, compliance reviews and incident reviews, but the experience is fragmented and not self-serve.",
         "evidence": [
-            f"{report_detail.get('count', keyword_counts.get(report_kw, 0))} report mentions across {report_call_count} calls",
+            f"{mentions} report mentions across {report_call_count} calls",
             f"Top contexts: {', '.join(subtype_bullets)}" if subtype_bullets else "",
             f"Mostly in {report_detail.get('dominant_call_type', 'unknown')} calls tagged '{report_detail.get('dominant_category', 'Other')}'",
         ],
+        "solution": "Ship exportable compliance/audit report templates (PDF/CSV) and an on-demand reporting engine. Prioritize SOC 2, ISO 27001 and incident reports.",
+        "expected_impact": "Reduces audit friction, shortens sales cycles, and cuts repetitive support requests.",
         "source_calls": report_examples_titles,
         "metrics": {
-            "mentions": report_detail.get("count", keyword_counts.get(report_kw, 0)),
+            "mentions": mentions,
             "call_count": report_call_count,
             "dominant_call_type": report_detail.get("dominant_call_type", "unknown"),
             "dominant_category": report_detail.get("dominant_category", "Other"),
@@ -340,11 +344,14 @@ def build_recommendations(
             "owner": "Engineering",
             "title": f"Prioritize fixes in '{topic}'",
             "headline": f"{topic} × {ctype.title()} is the lowest sentiment zone ({problem.get('sentiment', 0)}/5, {problem.get('call_count', 0)} calls, {problem.get('negative_pct', 0)}% negative).",
+            "problem": "Incident and outage calls directly impact customers. SLA pressure and repeated downtime erode trust and create churn risk.",
             "evidence": [
                 f"Lowest sentiment: {problem.get('sentiment', 0)}/5",
                 f"{problem.get('call_count', 0)} calls, {problem.get('negative_pct', 0)}% negative sentences",
                 "Outages, incidents and data gaps are the core drivers",
             ],
+            "solution": "Run a reliability sprint focused on outage root causes, detection coverage, runbooks, and proactive customer status communication.",
+            "expected_impact": "Improves retention in at-risk accounts and reduces escalation volume.",
             "source_calls": [],
             "metrics": {
                 "sentiment": problem.get("sentiment", 0),
@@ -362,12 +369,15 @@ def build_recommendations(
             "owner": "Sales / CS / Support",
             "title": "Standardize Billing & Contracts playbooks",
             "headline": f"Billing & Contracts is the largest category ({top_cat.get('count', 0)} calls, {top_cat.get('pct_of_total', 0)}% of volume), concentrated in external calls ({top_cat.get('dominant_pct', 0)}%).",
+            "problem": "Seat overages, invoice disputes and renewal terms generate repeated friction, especially in external sales and renewal conversations.",
             "evidence": [
                 f"{top_cat.get('count', 0)} calls tagged Billing & Contracts",
                 f"Dominant in {top_cat.get('dominant_call_type', 'external')} calls ({top_cat.get('dominant_pct', 0)}%)",
                 f"Category sentiment: {cat_sent}/5" if cat_sent is not None else "",
                 "Seat overages, invoice adjustments and renewal terms dominate",
             ],
+            "solution": "Create standardized renewal/quota playbooks and a self-service usage dashboard so reps and customers see the same numbers before renewal conversations.",
+            "expected_impact": "Fewer billing disputes, faster renewals, and clearer expansion paths.",
             "source_calls": [],
             "metrics": {
                 "count": top_cat.get("count", 0),
@@ -386,11 +396,14 @@ def build_recommendations(
         "owner": "Sales / Customer Success",
         "title": f"Executive intervention for {high_risk_count} high-risk accounts",
         "headline": f"{high_risk_count} high-risk + {medium_risk_count} medium-risk calls flagged by rule-based churn scoring.",
+        "problem": "A concentrated set of accounts shows multiple churn signals at once: negative sentiment, competitor mentions, escalations, executive involvement and product dissatisfaction.",
         "evidence": [
             f"{high_risk_count} high-risk, {medium_risk_count} medium-risk calls",
             "Top signals: escalation requested, product dissatisfaction, competitor mentions, executive involvement",
             f"Top accounts: {', '.join(top_risk_accounts)}" if top_risk_accounts else "",
         ],
+        "solution": "Assign an executive sponsor to every high-risk account and run a 30-day rescue plan with clear success milestones.",
+        "expected_impact": "Stems preventable churn and protects recurring revenue.",
         "source_calls": [a.get("title", "") for a in churn_narratives[:3]],
         "metrics": {
             "high_risk": high_risk_count,
@@ -404,11 +417,14 @@ def build_recommendations(
         "owner": "Operations / Analytics",
         "title": "Build closed-loop action-item tracking",
         "headline": f"{carry_forward_total} open action items sit in call summaries without a visible owner pipeline.",
+        "problem": "Action items are captured in call summaries but not tracked across handoffs, so customer commitments slip between support, sales and success.",
         "evidence": [
             f"{carry_forward_total} carry-forward actions extracted",
             f"Support: {action_counts.get('support', {}).get('avg_per_call', 0)} avg per call, External: {action_counts.get('external', {}).get('avg_per_call', 0)} avg per call",
             "Without tracking, customer commitments slip between support, sales and success handoffs",
         ],
+        "solution": "Integrate action items with CRM/ticketing, assign owners and due dates, and review aging items in weekly account reviews.",
+        "expected_impact": "Closes the loop on customer commitments and surfaces blockers before they become churn risks.",
         "source_calls": [],
         "metrics": {
             "carry_forward_total": carry_forward_total,
