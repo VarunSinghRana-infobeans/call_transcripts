@@ -14,7 +14,6 @@ env/
 
 # Local tooling / large binaries
 .libreoffice_portable/
-others/
 
 # Environment variables
 .env
