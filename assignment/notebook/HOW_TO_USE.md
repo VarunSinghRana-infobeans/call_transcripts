@@ -99,6 +99,17 @@ AI_PROVIDER=mock
 
 Scripts must run in order. Each script reads output from previous scripts.
 
+### Option A: One-command runner (recommended)
+
+```bash
+python run_all.py
+```
+
+This creates a timestamped run folder under `output/` and updates `output/latest`
+to point to it.
+
+### Option B: Run scripts individually
+
 ```bash
 # Step 1: Load and explore data
 python 01_explore.py

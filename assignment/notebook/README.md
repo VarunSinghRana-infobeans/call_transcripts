@@ -98,7 +98,10 @@ See `HOW_AI_WORKS.md` for detailed provider comparison.
 ### 3. Run Analysis
 
 ```bash
-# Run all scripts in order
+# Option A: run the whole pipeline in one command (creates a timestamped run folder)
+python run_all.py
+
+# Option B: run scripts individually
 python 01_explore.py
 python 02_call_types.py
 python 03_topic_modeling.py
