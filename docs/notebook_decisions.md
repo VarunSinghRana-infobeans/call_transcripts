@@ -559,10 +559,10 @@ Option 1: Keep Aspose fallback
   Cons: Every screenshot has "Evaluation Only" watermark
   Verdict: Not final-deliverable quality
 
-Option 2: Require LibreOffice for screenshots
-  Pros: Clean, watermark-free PNGs
-  Cons: Extra install; not needed to generate the actual PPTX
-  Verdict: Better, but screenshot generation is out of scope for the assignment
+Option 2: Use LibreOffice for watermark-free PDF export
+  Pros: Clean PDF, no paid license, works headlessly
+  Cons: Requires a one-time LibreOffice install or portable extraction
+  Verdict: Best for a final deliverable
 
 Option 3: Remove screenshot rendering entirely
   Pros: Repo contains only source code; no broken/watermarked artifacts
@@ -570,7 +570,7 @@ Option 3: Remove screenshot rendering entirely
   Verdict: Correct for a code submission
 ```
 
-We chose **Option 3**. The PPTX itself is the deliverable. Screenshots can be generated locally by anyone with PowerPoint or LibreOffice.
+We chose **Option 2 + Option 3**. The PPTX is the primary deliverable, and we added `export_pdf.py` that uses LibreOffice headless conversion to produce a watermark-free PDF on demand. The repo does not contain a screenshot rendering script, so there is no risk of committing watermarked images by accident.
 
 ### Final PPT Decisions
 
@@ -578,6 +578,7 @@ We chose **Option 3**. The PPTX itself is the deliverable. Screenshots can be ge
 - **Safe content zone**: 0.5" margins, hard stop at `BOTTOM_MAX = 5.35"`.
 - **Auto-reshape**: every shape is checked against bounds before and after creation.
 - **No screenshot script in repo**: avoids committing watermarked images by accident.
+- **PDF export**: `export_pdf.py` converts the PPTX to PDF with LibreOffice; no Aspose watermark.
 
 ---
 

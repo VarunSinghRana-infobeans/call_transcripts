@@ -156,15 +156,21 @@ output/
 |-- embeddings.npy
 |-- topics.json
 |-- Transcript_Intelligence_Report.pptx    <-- FINAL DELIVERABLE
+|-- Transcript_Intelligence_Report.pdf     <-- Watermark-free PDF (optional)
 ```
 
 ---
 
 ## Step 4: Review the Report
 
+```bash
+# Optional: create a watermark-free PDF (requires LibreOffice)
+python export_pdf.py
+```
+
 Open `output/Transcript_Intelligence_Report.pptx` in PowerPoint or Google Slides.
 
-The report has 14 slides:
+The report has 21 slides:
 - **Slide 1:** Title + KPIs
 - **Slide 2:** Executive Summary
 - **Slide 3:** Pipeline Overview
@@ -174,11 +180,14 @@ The report has 14 slides:
 - **Slide 7:** Where Sentiment Goes Negative
 - **Slide 8:** Where Sentiment Is Strongest
 - **Slide 9:** Churn Risk Detection
-- **Slide 10:** Feature Request Intelligence
-- **Slide 11:** Action Items & Call Efficiency
-- **Slide 12:** Recommendations
-- **Slide 13:** Appendix: Pipeline Methodology
-- **Slide 14:** Appendix: Additional Charts
+- **Slide 10:** Renewal Risk
+- **Slide 11:** Feature Request Intelligence
+- **Slide 12:** Action Items & Call Efficiency
+- **Slide 13:** Carry-Forward Actions
+- **Slide 14:** Recommendations at a Glance
+- **Slides 15-19:** Recommendation Details (one per top recommendation)
+- **Slide 20:** AI & Data Reasonableness Check
+- **Slide 21:** Appendix: Pipeline Methodology
 
 ---
 
@@ -223,6 +232,9 @@ AI_PROVIDER=openai python 03_topic_modeling.py
 
 # Rebuild PPT (no AI needed)
 python 06_generate_ppt.py
+
+# Re-export PDF
+python export_pdf.py
 ```
 
 ---
@@ -294,6 +306,14 @@ python 04_sentiment.py
 python 05_bonus_insights.py
 python 06_generate_ppt.py   # <-- Must be last
 ```
+
+### PDF export fails
+
+`export_pdf.py` needs LibreOffice. Options:
+
+1. Download LibreOffice Portable and extract to `.libreoffice_portable/extracted/`.
+2. Install LibreOffice system-wide and ensure `soffice` is on PATH.
+3. Skip the script and export the PPTX manually from PowerPoint.
 
 ---
 

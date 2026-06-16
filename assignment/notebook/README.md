@@ -9,12 +9,13 @@
 
 This folder contains the **analysis engine** for the Transcript Intelligence assignment.
 
-It reads 100 JSON call transcripts, runs statistical analysis, discovers topics, scores churn risk, and outputs a 14-slide PowerPoint presentation.
+It reads 100 JSON call transcripts, runs statistical analysis, discovers topics, scores churn risk, and outputs a 21-slide PowerPoint presentation.
 
 The panel sees:
 - **6 Python scripts** with full methodology
-- **14+ charts** (matplotlib)
+- **20+ charts** (matplotlib)
 - **1 PowerPoint** with findings and narrative
+- **Optional watermark-free PDF** via LibreOffice
 - **Q&A ready** with bookmarked analysis steps
 
 ---
@@ -38,12 +39,14 @@ assignment/notebook/
 |-- 04_sentiment.py           # Sentiment trends by type and week
 |-- 05_bonus_insights.py      # Churn scoring + feature requests + escalation funnel
 |-- 06_generate_ppt.py        # Build PowerPoint from all outputs
+|-- export_pdf.py             # Convert PPTX to watermark-free PDF
 |
 |-- output/                   # Generated files
-|   |-- charts/               # 14+ PNG charts
+|   |-- charts/               # 20+ PNG charts
 |   |-- *.csv                 # Data tables
 |   |-- *.json                # Structured results
 |   |-- Transcript_Intelligence_Report.pptx   # Final presentation
+|   |-- Transcript_Intelligence_Report.pdf    # Watermark-free PDF (optional)
 |
 |-- HOW_AI_WORKS.md           # How AI is used in each script
 |-- HOW_TO_USE.md             # Step-by-step run guide
@@ -104,9 +107,13 @@ python 05_bonus_insights.py
 python 06_generate_ppt.py
 ```
 
-### 4. Open the Report
+### 4. Export / Open the Report
 
 ```bash
+# Optional: create a watermark-free PDF (requires LibreOffice)
+python export_pdf.py
+
+# Open the PowerPoint
 output/Transcript_Intelligence_Report.pptx
 ```
 
@@ -121,7 +128,8 @@ output/Transcript_Intelligence_Report.pptx
 | `03_topic_modeling.py` | Discover topic clusters from summaries | Yes (cluster naming) | HDBSCAN finds structure; LLM makes it readable |
 | `04_sentiment.py` | Aggregate sentiment trends over time | No | Dataset already has per-sentence labels |
 | `05_bonus_insights.py` | Churn risk + feature requests + escalation | No | Rule-based scoring is transparent and verifiable |
-| `06_generate_ppt.py` | Build 14-slide PowerPoint | No | python-pptx is the standard for programmatic slides |
+| `06_generate_ppt.py` | Build 21-slide PowerPoint | No | python-pptx is the standard for programmatic slides |
+| `export_pdf.py` | Convert PPTX to PDF | No | Uses LibreOffice headless conversion |
 
 ---
 
@@ -217,7 +225,7 @@ MiniLM gives 90% of OpenAI's quality on conversational text. For 100 calls, the 
 
 ### Presentation
 
-`Transcript_Intelligence_Report.pptx` — 14 slides:
+`Transcript_Intelligence_Report.pptx` — 21 slides:
 1. Title + KPIs
 2. Executive Summary
 3. Pipeline Overview
@@ -227,11 +235,14 @@ MiniLM gives 90% of OpenAI's quality on conversational text. For 100 calls, the 
 7. Where Sentiment Goes Negative
 8. Where Sentiment Is Strongest
 9. Churn Risk Detection
-10. Feature Request Intelligence
-11. Action Items & Call Efficiency
-12. Recommendations
-13. Appendix: Pipeline Methodology
-14. Appendix: Additional Charts
+10. Renewal Risk
+11. Feature Request Intelligence
+12. Action Items & Call Efficiency
+13. Carry-Forward Actions
+14. Recommendations at a Glance
+15-19. Recommendation Details (one slide per top recommendation)
+20. AI & Data Reasonableness Check
+21. Appendix: Pipeline Methodology
 
 ---
 
@@ -281,9 +292,10 @@ OLLAMA_MODEL=mistral  # Different local model
 | Ollama not responding | Run `ollama serve` in another terminal |
 | OpenAI rate limit | Switch to `AI_PROVIDER=mock` for testing |
 | Charts missing from PPT | Run scripts 01-05 first, then 06 |
+| PDF export fails | Install LibreOffice or use PowerPoint's export manually |
 
 ---
 
 ## One-Line Summary
 
-> **Six Python scripts. One data-validation layer. Twenty-seven slides. Zero notebooks.**
+> **Six Python scripts. One data-validation layer. Twenty-one slides. Zero notebooks.**

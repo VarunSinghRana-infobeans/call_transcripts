@@ -370,9 +370,10 @@ def add_kpi_row(slide, kpis, y, box_w, box_h, gap=Inches(0.12),
             value_size = default_value_size
         left = start_x + i * (box_w + gap)
         add_card(slide, left, y, box_w, box_h, fill=card_fill)
-        add_text(slide, left, y + Inches(0.08), box_w, Inches(0.52),
+        # Keep both value and label inside the card boundaries
+        add_text(slide, left, y + Inches(0.06), box_w, box_h - Inches(0.30),
                  str(val), value_size, bold=True, color=color, align=PP_ALIGN.CENTER)
-        add_text(slide, left, y + Inches(0.63), box_w, Inches(0.28),
+        add_text(slide, left, y + box_h - Inches(0.24), box_w, Inches(0.22),
                  label, FONT_KPI_LABEL, color=label_color, align=PP_ALIGN.CENTER)
 
 
@@ -1066,7 +1067,7 @@ def add_renewal_risk_slide(prs, data: PresentationData):
 
     calls = [c for c in renewal.get("calls", []) if c.get("is_risky")][:3]
     card_h = Inches(0.74)
-    gap = Inches(0.06)
+    gap = Inches(0.04)
     y = CONTENT_Y + Inches(1.22)
     flag_label = {
         "negative_sentiment_dominates": "negative tone",
@@ -1082,9 +1083,11 @@ def add_renewal_risk_slide(prs, data: PresentationData):
         account = call.get("account", "Unknown account")
         left_info = f"Account: {account}  |  {call.get('call_type', 'unknown').title()} call"
         right_info = f"Sentiment: {call.get('sentiment_score', 0)}/5  |  Score: {call.get('churn_score', 0)}"
-        add_text(slide, MARGIN + Inches(0.10), y + Inches(0.34), Inches(4.5), Inches(0.20),
+        add_text(slide, MARGIN + Inches(0.10), y + Inches(0.34), Inches(5.2), Inches(0.20),
                  left_info, FONT_TINY, color=C_LIGHT)
-        add_text(slide, MARGIN + Inches(5.0), y + Inches(0.34), Inches(4.5), Inches(0.20),
+        # Pin the right-aligned metadata inside the card so it never clips the slide edge
+        right_w = Inches(2.60)
+        add_text(slide, RIGHT_EDGE - right_w, y + Inches(0.34), right_w, Inches(0.20),
                  right_info, FONT_TINY, color=C_LIGHT, align=PP_ALIGN.RIGHT)
         flags = "  |  ".join(flag_label.get(s, s.replace("_", " ")) for s in call.get("risk_flags", [])[:3])
         add_text(slide, MARGIN + Inches(0.10), y + Inches(0.56), CONTENT_W - Inches(0.24), Inches(0.18),
@@ -1099,9 +1102,10 @@ def add_renewal_risk_slide(prs, data: PresentationData):
         )
     else:
         insight = "Conclusion: No renewal calls detected."
-    footer_y = y + Inches(0.06)
-    add_card(slide, MARGIN, footer_y, CONTENT_W, Inches(0.40), line=C_SECONDARY)
-    add_text(slide, MARGIN + Inches(0.12), footer_y + Inches(0.06), CONTENT_W - Inches(0.24), Inches(0.28),
+    footer_y = y + Inches(0.04)
+    footer_h = Inches(0.36)
+    add_card(slide, MARGIN, footer_y, CONTENT_W, footer_h, line=C_SECONDARY)
+    add_text(slide, MARGIN + Inches(0.12), footer_y + Inches(0.05), CONTENT_W - Inches(0.24), footer_h - Inches(0.10),
              fit_text(insight, CONTENT_W - Inches(0.24), FONT_TINY, 2), FONT_TINY, color=C_TEXT)
 
     check(slide, "Renewal Risk")

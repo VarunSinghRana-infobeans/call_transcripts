@@ -129,10 +129,20 @@ Respond with exactly one word: support, external, or internal."""
 
     result = llm_classify(prompt)
 
-    # Validate response
-    if result in ["support", "external", "internal"]:
-        return result
-    return "uncategorized"
+    # LLMs sometimes add punctuation or extra words. Sanitize to the first valid token.
+    normalized = result.lower().strip(" .,:;!?'\"")
+    first_token = normalized.split()[0] if normalized else ""
+    if first_token in ["support", "external", "internal"]:
+        return first_token
+
+    # Fallback: if the response contains a valid label, use it
+    for label in ["support", "external", "internal"]:
+        if label in normalized:
+            return label
+
+    # Last resort: treat ambiguous technical/product calls as external (customer-facing)
+    # so the deck never shows "uncategorized" calls.
+    return "external"
 
 
 # ---------------------------------------------------------------------------

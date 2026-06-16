@@ -142,10 +142,12 @@ def score_churn_risk(call):
     return score
 ```
 
-### AI Extracts Evidence (Optional, for slides)
+### AI Could Extract Evidence (Optional, Not Used Here)
+
+The current `05_bonus_insights.py` is fully rule-based. We *could* ask an LLM to pull the exact "smoking gun" quote for each at-risk account, but the pipeline does not do that today:
 
 ```python
-# Ask LLM: "Find the exact sentence where the customer expresses dissatisfaction"
+# Hypothetical future enhancement:
 prompt = f"""
 In this call transcript, find the most negative sentence.
 Return the exact quote and who said it.
@@ -153,52 +155,38 @@ Return the exact quote and who said it.
 Transcript:
 {call.transcript}
 """
-
-# LLM responds:
-# "Raj (Customer): 'My team has been getting hammered with tickets since Saturday.'"
 ```
 
-**Why AI here:**
-  - Scoring is rule-based (transparent, no black box).
-  - AI extracts the "smoking gun" quotes for slides.
-  - Panel sees the evidence, not just the number.
+**Why we skip it:**
+  - The score is already transparent and verifiable from the transcript.
+  - The deck surfaces account names, scores, and risk flags directly from the data.
+  - Avoiding LLM calls here keeps the pipeline fast, free, and reproducible.
 
-**AI cost:** ~20 API calls (one per at-risk account).
+**AI cost in this script:** 0 API calls.
 
 ---
 
 ## 4. Slide Narrative Generation (script 06)
 
-### AI Writes the Story
+### AI Is Not Used in `06_generate_ppt.py`
+
+The PowerPoint deck is built with `python-pptx` using deterministic templates populated directly from the analysis outputs:
 
 ```python
-prompt = f"""
-Here are the findings from analyzing 100 customer calls:
-
-- 23 calls about outages and reliability issues
-- Support sentiment dropped 18% the week of March 9
-- 4 accounts scored high for churn risk
-- "Granular restore" was requested 6 times
-
-Write 3 bullet points that a CEO would care about.
-Make them specific, impactful, and actionable.
-"""
-
-# LLM responds:
-# "1. Reliability issues are the #1 driver of negative customer sentiment,
-#     affecting 23 of 100 recent calls.
-#  2. Four enterprise accounts show high churn risk signals,
-#     including competitor mentions and escalation requests.
-#  3. Customers have requested 'granular restore' 6 times in 2 months,
-#     indicating a gap in our backup product line."
+findings = [
+    ("🚨", "Churn risk is concentrated",
+     f"{data.risk_distribution.high} accounts flagged high-risk ...",
+     C_RED),
+    ...
+]
 ```
 
-**Why AI here:**
-  - We have the numbers. AI makes them compelling.
-  - Different audiences need different framing.
-  - CEO wants business impact. Engineer wants technical details.
+**Why no AI here:**
+  - The numbers and insights are already computed in scripts 01-05.
+  - Templates guarantee consistency, reproducibility, and no API cost.
+  - Every headline is traceable to a specific CSV/JSON source.
 
-**AI cost:** 5-10 API calls (one per slide section).
+**AI cost:** 0 API calls.
 
 ---
 
@@ -234,9 +222,9 @@ which accounts mentioned competitors and what did they say?
 | 02_call_types.py | Reviews ambiguous titles | ~30 | Low |
 | 03_topic_modeling.py | Names clusters | 6-8 | Very low |
 | 05_bonus_insights.py | Extracts evidence quotes | ~20 | Low |
-| 06_generate_slides.py | Writes narrative | 5-10 | Very low |
+| 06_generate_ppt.py | Builds slides from data | 0 | None |
 
-**Total: ~70 API calls.** With GPT-4o-mini or local Ollama: essentially free.
+**Total: ~35 API calls (only scripts 02 and 03).** With GPT-4o-mini or local Ollama: essentially free.
 
 ---
 
@@ -246,7 +234,7 @@ which accounts mentioned competitors and what did they say?
 Option 1: OpenAI API (cloud)
   - GPT-4o-mini: fast, cheap, high quality
   - GPT-4o: best quality, slightly more expensive
-  - Cost for 70 calls: ~$0.50 - $2.00
+  - Cost for ~35 calls: ~$0.25 - $1.00
 
 Option 2: Ollama (local)
   - llama3.2 or mistral: free, offline

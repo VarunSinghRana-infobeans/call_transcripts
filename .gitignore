@@ -10,6 +10,11 @@ __pycache__/
 venv/
 env/
 .venv/
+.venv_convert/
+
+# Local tooling / large binaries
+.libreoffice_portable/
+others/
 
 # Environment variables
 .env
