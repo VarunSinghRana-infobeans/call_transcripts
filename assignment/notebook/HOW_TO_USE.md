@@ -102,7 +102,7 @@ Scripts must run in order. Each script reads output from previous scripts.
 ### Option A: One-command runner (recommended)
 
 ```bash
-python run_all.py
+python start.py
 ```
 
 This creates a timestamped run folder under `output/` and updates `output/latest`
